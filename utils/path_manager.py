@@ -1,140 +1,139 @@
-"""Cross-platform path manager for Memento-S."""
+"""Cross-platform path manager for Memento-S.
+
+统一路径入口，内部委托给 RuntimeMode。
+保留 packaged 参数以兼容旧调用，但已废弃。
+"""
 
 from __future__ import annotations
 
-import os
-import sys
+import warnings
 from pathlib import Path
-from tempfile import gettempdir
+from typing import Any
 
-import platformdirs
+from utils.runtime_mode import RuntimeMode, get_runtime_mode
 
 
 class PathManager:
-    """Centralized cross-platform path provider."""
+    """Centralized cross-platform path provider.
 
+    所有路径方法内部委托给 RuntimeMode，保持接口兼容。
+    """
+
+    # 应用标识（兼容旧代码）
     APP_NAME = "memento_s"
     APP_AUTHOR = "memento_s"
 
     @classmethod
     def is_packaged_runtime(cls) -> bool:
-        """Return True when running from packaged/frozen binary (double-check)."""
-        frozen_flag = bool(getattr(sys, "frozen", False))
-        meipass_flag = bool(getattr(sys, "_MEIPASS", None))
-        env_flag = os.getenv("MEMENTO_PACKAGED", "").lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
-        return frozen_flag or meipass_flag or env_flag
+        """判断是否为打包运行环境（已废弃，使用 RuntimeMode）"""
+        warnings.warn(
+            "PathManager.is_packaged_runtime() 已废弃，请使用 RuntimeMode",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return get_runtime_mode() == RuntimeMode.PRODUCTION
 
     @classmethod
-    def _resolve_packaged_mode(cls, packaged: bool | None) -> bool:
-        """Resolve runtime mode; explicit argument overrides auto-detection."""
+    def _resolve_packaged_mode(cls, packaged: bool | None) -> RuntimeMode:
+        """解析运行时模式（兼容旧接口，已废弃）"""
         if packaged is not None:
-            return packaged
-        return cls.is_packaged_runtime()
+            warnings.warn(
+                "PathManager 的 packaged 参数已废弃，请使用 MEMENTO_ENV 环境变量",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            return RuntimeMode.PRODUCTION if packaged else RuntimeMode.DEV
+        return get_runtime_mode()
+
+    # ── 路径方法（委托给 RuntimeMode）────────────────────────
 
     @classmethod
     def get_home_dir(cls, packaged: bool | None = None) -> Path:
-        """Return runtime-specific home/base directory."""
+        """返回用户主目录"""
         _ = cls._resolve_packaged_mode(packaged)
         return Path.home()
 
     @classmethod
     def get_project_root_dir(cls, packaged: bool | None = None) -> Path:
-        """Return application root directory.
-
-        - Dev runtime: Path.home()/memento_s
-        - Packaged runtime: platformdirs user config directory
-        """
-        if cls._resolve_packaged_mode(packaged):
-            return Path(platformdirs.user_config_dir(cls.APP_NAME, cls.APP_AUTHOR))
-        return cls.get_home_dir(packaged=False) / cls.APP_NAME
+        """返回应用根目录"""
+        mode = cls._resolve_packaged_mode(packaged)
+        return mode.config_dir
 
     @classmethod
     def get_config_file(cls, packaged: bool | None = None) -> Path:
-        """Return config file path under application root directory."""
-        return cls.get_project_root_dir(packaged=packaged) / "config.json"
+        """返回配置文件路径"""
+        mode = cls._resolve_packaged_mode(packaged)
+        return mode.config_dir / "config.json"
 
     @classmethod
     def get_data_dir(cls, packaged: bool | None = None) -> Path:
-        """Return the root directory for user data (workspace, skills, etc).
-
-        - Dev runtime: ~/memento_s
-        - Packaged runtime: platformdirs user data dir
-        """
-        if cls._resolve_packaged_mode(packaged):
-            return Path(platformdirs.user_data_dir(cls.APP_NAME, cls.APP_AUTHOR))
-        return cls.get_project_root_dir(packaged=False)
+        """返回用户数据根目录"""
+        mode = cls._resolve_packaged_mode(packaged)
+        return mode.data_dir
 
     @classmethod
     def get_workspace_dir(cls, packaged: bool | None = None) -> Path:
-        """Return workspace directory.
-
-        - Dev runtime: ~/memento_s/workspace
-        - Packaged runtime: platformdirs user data dir + /workspace
-        """
-        return cls.get_data_dir(packaged=packaged) / "workspace"
+        """返回工作区目录"""
+        mode = cls._resolve_packaged_mode(packaged)
+        return mode.workspace_dir
 
     @classmethod
     def get_skills_dir(cls, packaged: bool | None = None) -> Path:
-        """Return skills directory."""
-        return cls.get_data_dir(packaged=packaged) / "skills"
+        """返回 skills 目录"""
+        mode = cls._resolve_packaged_mode(packaged)
+        return mode.skills_dir
 
     @classmethod
     def get_db_dir(cls, packaged: bool | None = None) -> Path:
-        """Return database directory."""
-        return cls.get_data_dir(packaged=packaged) / "db"
+        """返回数据库目录"""
+        mode = cls._resolve_packaged_mode(packaged)
+        return mode.db_dir
 
     @classmethod
     def get_logs_dir(cls, packaged: bool | None = None) -> Path:
-        """Return logs directory."""
-        if cls._resolve_packaged_mode(packaged):
-            return Path(platformdirs.user_log_dir(cls.APP_NAME, cls.APP_AUTHOR))
-        return cls.get_project_root_dir(packaged=False) / "logs"
+        """返回日志目录"""
+        mode = cls._resolve_packaged_mode(packaged)
+        return mode.logs_dir
 
     @classmethod
     def get_venv_dir(cls, packaged: bool | None = None) -> Path:
-        """Return uv virtual environment directory.
+        """返回虚拟环境目录"""
+        mode = cls._resolve_packaged_mode(packaged)
+        return mode.venv_dir
 
-        Located alongside workspace directory (same parent) for uv sandbox.
-        - Dev runtime: ~/memento_s/.venv
-        - Packaged runtime: platformdirs user data dir + /.venv
-        """
-        return cls.get_data_dir(packaged=packaged) / ".venv"
+    @classmethod
+    def get_mcp_config_file(cls, packaged: bool | None = None) -> Path:
+        """返回 MCP 配置文件路径"""
+        mode = cls._resolve_packaged_mode(packaged)
+        return mode.config_dir / "mcp.json"
 
     @classmethod
     def get_context_dir(cls, packaged: bool | None = None) -> Path:
-        """Return context data directory (memory, daily notes, scratchpad).
-
-        - Dev runtime: ~/memento_s/context
-        - Packaged runtime: platformdirs user data dir + /context
-        """
-        return cls.get_data_dir(packaged=packaged) / "context"
+        """返回上下文数据目录"""
+        mode = cls._resolve_packaged_mode(packaged)
+        return mode.context_dir
 
 
-def _print_mode_paths(mode_name: str, packaged: bool) -> None:
+def _print_mode_paths(mode_name: str, mode: RuntimeMode) -> None:
+    """打印指定模式的路径（调试用）"""
     print(f"[{mode_name}]")
-    print(f"  home_dir:         {PathManager.get_home_dir(packaged=packaged)}")
-    print(f"  project_root_dir: {PathManager.get_project_root_dir(packaged=packaged)}")
-    print(f"  config_file:      {PathManager.get_config_file(packaged=packaged)}")
-    print(f"  workspace_dir:    {PathManager.get_workspace_dir(packaged=packaged)}")
-    print(f"  skills_dir:       {PathManager.get_skills_dir(packaged=packaged)}")
-    print(f"  db_dir:           {PathManager.get_db_dir(packaged=packaged)}")
-    print(f"  logs_dir:         {PathManager.get_logs_dir(packaged=packaged)}")
-    print(f"  venv_dir:         {PathManager.get_venv_dir(packaged=packaged)}")
+    print(f"  project_root_dir: {mode.config_dir}")
+    print(f"  data_dir:         {mode.data_dir}")
+    print(f"  workspace_dir:    {mode.workspace_dir}")
+    print(f"  skills_dir:       {mode.skills_dir}")
+    print(f"  db_dir:           {mode.db_dir}")
+    print(f"  logs_dir:         {mode.logs_dir}")
+    print(f"  venv_dir:         {mode.venv_dir}")
 
 
 def _main() -> None:
-    """Self-test: print both dev-mode and packaged-mode paths."""
+    """自检：打印两种模式的路径"""
     print("[PathManager] self-test")
-    print(f"  detected_packaged_runtime: {PathManager.is_packaged_runtime()}")
+    print(f"  current_mode: {get_runtime_mode().value}")
     print()
-    _print_mode_paths("dev", packaged=False)
+    _print_mode_paths("DEV", RuntimeMode.DEV)
     print()
-    _print_mode_paths("packaged", packaged=True)
+    _print_mode_paths("PRODUCTION", RuntimeMode.PRODUCTION)
 
 
 if __name__ == "__main__":

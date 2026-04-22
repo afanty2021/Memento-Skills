@@ -5,6 +5,7 @@ Platform capability detection for the execution layer.
 from __future__ import annotations
 
 import os
+import platform
 import shutil
 import sys
 import sysconfig
@@ -151,6 +152,22 @@ def uv_install_hint() -> str:
     if has_powershell():
         return 'powershell -c "irm https://astral.sh/uv/install.ps1 | iex"'
     return "curl -LsSf https://astral.sh/uv/install.sh | sh"
+
+
+def node_install_hint() -> str:
+    """Return platform-specific Node.js installation command."""
+    sys_platform = platform.system()
+    if sys_platform == "Windows":
+        return "winget install OpenJS.NodeJS.LTS"
+    elif sys_platform == "Darwin":
+        return "brew install node"
+    else:
+        return "curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt install -y nodejs"
+
+
+def has_node() -> bool:
+    """Return True if Node.js is found in PATH."""
+    return shutil.which("node") is not None
 
 
 # ------------------------------------------------------------------ #

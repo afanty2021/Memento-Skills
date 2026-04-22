@@ -8,8 +8,8 @@ from typing import Any
 
 from core.protocol.types import PlanStepStatus
 
-from ..schemas import AgentConfig
-from .intent import IntentMode
+from ..schemas import AgentRuntimeConfig
+from core.protocol import IntentMode
 from .planning import PlanStep, TaskPlan
 
 
@@ -29,7 +29,7 @@ def _build_tool_signature(tool_name: str, args: dict[str, Any]) -> str:
 class AgentRunState:
     """Encapsulates the mutable state tracked across execution iterations."""
 
-    config: AgentConfig = field(default_factory=AgentConfig)
+    config: AgentRuntimeConfig = field(default_factory=AgentRuntimeConfig)
 
     mode: IntentMode = IntentMode.AGENTIC
 
@@ -62,11 +62,20 @@ class AgentRunState:
     # Reflection decision history (for deduplication / context)
     reflection_history: list[str] = field(default_factory=list)
 
+    # Inter-step context: structured summary from the last completed step
+    last_step_summary: str = ""
+
+    # Per-skill failure tracking: skill_name → list of recent error types
+    skill_failure_tracker: dict[str, list[str]] = field(default_factory=dict)
+
     # Duplicate tool call detection
     _last_tool_sig: str = field(default="", repr=False)
     _dup_count: int = field(default=0, repr=False)
     _last_tool_success: bool = field(default=True, repr=False)
     _last_result_hash: int | None = field(default=None, repr=False)
+
+    # Finalize injection guard: prevents duplicate FINALIZE_INSTRUCTION in messages
+    finalize_injected: bool = field(default=False, repr=False)
 
     # ── Helpers ──────────────────────────────────────────────────────
 
@@ -126,43 +135,6 @@ class AgentRunState:
         if self.task_plan and len(self.plan_step_statuses) != len(self.task_plan.steps):
             self.plan_step_statuses = [PlanStepStatus.PENDING] * len(self.task_plan.steps)
 
-    def to_plan_prompt_section(self) -> str:
-        """Render the plan as a markdown checklist for injection into prompts."""
-        if not self.task_plan or not self.task_plan.steps:
-            return ""
-        self._ensure_statuses()
-        _MARKERS = {
-            PlanStepStatus.PENDING: "[ ]",
-            PlanStepStatus.IN_PROGRESS: "[~]",
-            PlanStepStatus.DONE: "[x]",
-            PlanStepStatus.FAILED: "[!]",
-        }
-        lines = ["## Task Plan"]
-        for i, step in enumerate(self.task_plan.steps):
-            status = (
-                self.plan_step_statuses[i]
-                if i < len(self.plan_step_statuses)
-                else PlanStepStatus.PENDING
-            )
-            marker = _MARKERS.get(status, "[ ]")
-            lines.append(f"  {marker} Step {step.step_id}: {step.action}")
-        done = sum(1 for s in self.plan_step_statuses if s == PlanStepStatus.DONE)
-        lines.append(f"\nProgress: {done}/{len(self.task_plan.steps)}")
-        return "\n".join(lines)
-
-    def sync_plan_state(self, session_ctx: Any) -> None:
-        """Push current plan into ``SessionContext`` (backward-compat bridge).
-
-        Keeps ``SessionContext._plan_steps/_plan_statuses`` in sync so that
-        ``to_prompt_section`` on the session still renders correctly.
-        """
-        if not self.task_plan:
-            return
-        self._ensure_statuses()
-        steps_text = [s.action for s in self.task_plan.steps]
-        session_ctx.set_plan(steps_text)
-        session_ctx._plan_statuses = list(self.plan_step_statuses)
-
     def advance_plan_step(self) -> None:
         """Mark the current step as done and move to the next."""
         self._ensure_statuses()
@@ -207,9 +179,9 @@ class AgentRunState:
         return data
 
     @classmethod
-    def deserialize(cls, data: dict[str, Any], config: AgentConfig | None = None) -> "AgentRunState":
+    def deserialize(cls, data: dict[str, Any], config: AgentRuntimeConfig | None = None) -> "AgentRunState":
         """Reconstruct from a serialized dict."""
-        cfg = config or AgentConfig()
+        cfg = config or AgentRuntimeConfig()
         state = cls(config=cfg)
         state.mode = IntentMode(data.get("mode", "agentic"))
         state.current_plan_step_idx = data.get("current_plan_step_idx", 0)

@@ -33,21 +33,22 @@ _sync_skills()
   └── cleanup_orphaned_skills()  # 清理孤儿技能
 ```
 
-### Phase 2: GUI 初始化
+### Phase 2: Electron 初始化
 
 **时间点**: 20:32:04
 
 ```
-gui.app:initialize:154 - [INIT] Step 1: Starting GUI initialization...
-gui.app:initialize:194 - [INIT] Skill gateway created successfully
-gui.app:initialize:203 - [INIT] Skill names: ['docx', 'filesystem', 'image_analysis', 'pdf', ...]
+electron/main.ts - [INIT] Starting Electron main process...
+electron/main.ts - [INIT] Python backend started on port 18765
+electron/main.ts - [INIT] IPC handlers registered
+electron/main.ts - [INIT] Vue renderer loaded successfully
 ```
 
 **关键调用**:
-- `gui.app:initialize()` - GUI 初始化
-- `SkillProvider.create_default()` - 创建 Skill Provider
-- `UvLocalSandbox._setup_venv()` - 设置 Python 虚拟环境
-  - `install_python_deps(['pip'])` - 安装 pip 工具
+- `electron/main.ts` - Electron 主进程启动
+- `python-process.ts` - 启动 Python 后端 FastAPI 服务 (端口 18765)
+- `ipc-handlers.ts` - 注册 IPC 处理器
+- Vue 3 渲染进程加载并连接 Electron API
 
 ### Phase 3: 意图识别 (Intent Recognition)
 
@@ -161,7 +162,7 @@ core.memento_s.tool_dispatcher:ToolDispatcher._execute_skill()
           prompt = self._build_prompt(skill, query)
           
           # 4.2 调用 LLM 生成代码
-          response = await llm.async_chat(messages=[...], tools=BUILTIN_TOOL_SCHEMAS)
+          response = await llm.async_chat(messages=[...], tools=get_tool_schemas())
           
           # 4.3 LLM 生成 bash 命令
           # command: python << 'EOF'
@@ -351,12 +352,12 @@ PDF created successfully: ht.pdf"
 # core/skill/execution/executor.py:SkillExecutor
   ├── execute(skill, query)
   │     ├── _build_prompt(skill, query)  # 构建执行提示词
-  │     ├── llm.async_chat(tools=BUILTIN_TOOL_SCHEMAS)  # LLM 生成工具调用
-  │     └── _execute_with_tool_calls(skill, tool_calls)
+│     ├── llm.async_chat(tools=get_tool_schemas())  # LLM 生成工具调用
+│     └── execute_tool(tc.name, tc.arguments)  # 通过 ToolRegistry 执行
   │
   └── _execute_with_tool_calls(skill, tool_calls)
         └── for tc in tool_calls:
-              execute_builtin_tool(tc.name, tc.arguments)
+              execute_tool(tc.name, tc.arguments)  # via ToolRegistry
 ```
 
 ### 5. Sandbox 层

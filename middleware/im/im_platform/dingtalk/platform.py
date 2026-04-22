@@ -68,15 +68,43 @@ class DingTalkPlatform:
 
     优先从 ~/memento_s/config.json 的 im.dingtalk 节读取配置，
     缺失时回退到同名环境变量（DINGTALK_APP_KEY / DINGTALK_APP_SECRET / DINGTALK_WEBHOOK_URL）。
+
+    也支持直接传入凭证参数（优先使用传入的值）。
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        app_key: str | None = None,
+        app_secret: str | None = None,
+        webhook_url: str | None = None,
+        webhook_secret: str | None = None,
+    ) -> None:
         cfg = _load_dingtalk_config()
-        self._app_key = cfg.get("app_key") or os.environ.get("DINGTALK_APP_KEY", "")
-        self._app_secret = cfg.get("app_secret") or os.environ.get("DINGTALK_APP_SECRET", "")
-        self._webhook_url = cfg.get("webhook_url") or os.environ.get("DINGTALK_WEBHOOK_URL", "")
-        self._webhook_secret = cfg.get("webhook_secret") or os.environ.get("DINGTALK_WEBHOOK_SECRET", "")
-        self._base_url = (cfg.get("base_url") or os.environ.get("DINGTALK_BASE_URL", DEFAULT_BASE_URL)).rstrip("/")
+
+        # 优先使用传入的参数，其次从配置文件读取，最后回退到环境变量
+        self._app_key = (
+            app_key
+            if app_key is not None
+            else cfg.get("app_key") or os.environ.get("DINGTALK_APP_KEY", "")
+        )
+        self._app_secret = (
+            app_secret
+            if app_secret is not None
+            else cfg.get("app_secret") or os.environ.get("DINGTALK_APP_SECRET", "")
+        )
+        self._webhook_url = (
+            webhook_url
+            if webhook_url is not None
+            else cfg.get("webhook_url") or os.environ.get("DINGTALK_WEBHOOK_URL", "")
+        )
+        self._webhook_secret = (
+            webhook_secret
+            if webhook_secret is not None
+            else cfg.get("webhook_secret") or os.environ.get("DINGTALK_WEBHOOK_SECRET", "")
+        )
+        self._base_url = (
+            cfg.get("base_url") or os.environ.get("DINGTALK_BASE_URL", DEFAULT_BASE_URL)
+        ).rstrip("/")
 
         self._use_webhook_only = bool(self._webhook_url and not (self._app_key and self._app_secret))
 

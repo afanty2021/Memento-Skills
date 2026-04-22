@@ -28,12 +28,10 @@ os.environ["LOG_LEVEL"] = "DEBUG"
 from middleware.config import g_config
 from utils.logger import setup_logger, get_logger
 from core.skill.gateway import SkillGateway
-from core.skill.config import SkillConfig
+from shared.schema import SkillConfig, SkillExecutionResponse, SkillStatus
 from core.skill.gateway import (
     SkillGateway,
-    SkillExecutionResponse,
     SkillPreflightResult,
-    SkillStatus,
     SkillErrorCode,
 )
 from core.skill.schema import Skill

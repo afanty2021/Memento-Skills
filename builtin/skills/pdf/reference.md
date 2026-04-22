@@ -587,18 +587,10 @@ qpdf --replace-input corrupted.pdf
 ```
 
 ### Text Extraction Issues
-```python
-# Fallback to OCR for scanned PDFs
-import pytesseract
-from pdf2image import convert_from_path
 
-def extract_text_with_ocr(pdf_path):
-    images = convert_from_path(pdf_path)
-    text = ""
-    for i, image in enumerate(images):
-        text += pytesseract.image_to_string(image)
-    return text
-```
+For scanned PDFs where `pdfplumber.extract_text()` returns empty, convert pages to images
+with `convert_pdf_to_images.py` (Step 1 above), then use `python_repl` to call a vision-capable
+LLM for OCR on the image files. Batch up to 8 images per LLM call. Do NOT install easyocr, pytesseract, or opencv — vision models handle OCR natively.
 
 ## License Information
 

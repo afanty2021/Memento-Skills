@@ -294,8 +294,20 @@ class WeixinClient:
         return redacted
 
     async def _ensure_session(self):
-        """Ensure aiohttp session exists."""
+        """Ensure aiohttp session exists and is valid for current task.
+
+        aiohttp 3.9+ tracks which task created the session. If we try to use
+        a session from a different task, it raises:
+        RuntimeError: Timeout context manager should be used inside a task
+        """
+        current_task = asyncio.current_task()
         if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        elif getattr(self._session, '_task', None) != current_task:
+            # Session was created in a different task. We cannot safely close it
+            # from this task (aiohttp 3.9+ enforces task affinity). Just abandon
+            # it and create a new one -- the orphaned session will be closed by
+            # its creating task when that task exits.
             self._session = aiohttp.ClientSession()
 
     async def _api_fetch(

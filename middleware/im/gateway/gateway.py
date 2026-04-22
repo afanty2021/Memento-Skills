@@ -216,14 +216,14 @@ class ChannelRegistry:
 
             except Exception as e:
                 logger.debug(
-                    "Failed to discover plugin in %s: %s",
+                    "Failed to discover plugin in {}: {}",
                     channel_dir,
                     e,
                 )
 
         self._discovered_paths.append(plugin_dir)
 
-        logger.info("Discovered %d plugins from %s", count, plugin_dir)
+        logger.info("Discovered {} plugins from {}", count, plugin_dir)
 
         return count
 
@@ -370,7 +370,7 @@ class AccountManager:
         # 检查协议版本
         if adapter.protocol_version > PROTOCOL_VERSION:
             logger.warning(
-                "Adapter version (%d) > Gateway version (%d), "
+                "Adapter version ({}) > Gateway version ({}), "
                 "some features may not work",
                 adapter.protocol_version,
                 PROTOCOL_VERSION,
@@ -390,18 +390,18 @@ class AccountManager:
         # 初始化适配器
         connection_config = config.to_connection_config()
         logger.info(
-            "[AccountManager] About to initialize adapter for %s (type=%s)",
+            "[AccountManager] About to initialize adapter for {} (type={})",
             account_id,
             type(adapter).__name__,
         )
         try:
             await adapter.initialize(connection_config, mode)
             logger.info(
-                "[AccountManager] ✓ Adapter initialized successfully for %s", account_id
+                "[AccountManager] ✓ Adapter initialized successfully for {}", account_id
             )
         except Exception as e:
             logger.error(
-                "[AccountManager] ✗ Adapter initialization FAILED for %s: %s",
+                "[AccountManager] ✗ Adapter initialization FAILED for {}: {}",
                 account_id,
                 e,
                 exc_info=True,

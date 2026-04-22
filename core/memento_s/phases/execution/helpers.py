@@ -1,117 +1,59 @@
-"""Execution helpers — message trimming, plan status rendering, append logic."""
+"""Execution helpers — append logic, context token, and pre-API pipeline utilities."""
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from core.prompts.templates import POST_COMPACTION_STATE
-from utils.logger import get_logger
-
-from ..state import AgentRunState
-
-logger = get_logger(__name__)
+if TYPE_CHECKING:
+    from core.context import ContextManager
+    from ..state import AgentRunState
 
 
-def _trim_messages(
-    messages: list[dict[str, Any]], keep_tail: int = 20
-) -> list[dict[str, Any]]:
-    """保留所有 system 消息 + 最后 keep_tail 条非 system 消息，用于上下文超限时裁剪。"""
-    system_msgs = [m for m in messages if m.get("role") == "system"]
-    non_system = [m for m in messages if m.get("role") != "system"]
-    trimmed = non_system[-keep_tail:] if len(non_system) > keep_tail else non_system
-    logger.warning(
-        "Context window exceeded, trimming messages: %d → %d non-system messages kept",
-        len(non_system),
-        len(trimmed),
-    )
-    return system_msgs + trimmed
-
-
-def _live_ctx_tokens(ctx: Any) -> int | None:
+def _live_ctx_tokens(ctx: ContextManager | None) -> int | None:
     """Return the live token count from ContextManager, or None."""
     if ctx is not None and hasattr(ctx, "total_tokens"):
         return ctx.total_tokens
     return None
 
 
-def _build_plan_status(state: AgentRunState) -> str:
-    """Build a structured plan status string from AgentRunState for compaction."""
-    if not state.task_plan:
-        return ""
-
-    lines: list[str] = []
-    for i, ps in enumerate(state.task_plan.steps):
-        if i < state.current_plan_step_idx:
-            lines.append(f"- Step {ps.step_id}: {ps.action} [DONE]")
-        elif i == state.current_plan_step_idx:
-            partial = ""
-            if state.step_accumulated_results:
-                partial = "; ".join(
-                    r[:200] for r in state.step_accumulated_results[-3:]
-                )
-            lines.append(
-                f"- Step {ps.step_id}: {ps.action} [IN PROGRESS]"
-                + (f" — partial results: {partial}" if partial else "")
-            )
-        else:
-            lines.append(f"- Step {ps.step_id}: {ps.action} [PENDING]")
-
-    return f"Goal: {state.task_plan.goal}\n" + "\n".join(lines)
-
-
-def _build_post_compaction_msg(state: AgentRunState) -> dict[str, Any] | None:
-    """Build a structured post-compaction plan state message."""
-    if not state.task_plan:
-        return None
-
-    completed_lines: list[str] = []
-    current_line = "  (none)"
-    remaining_lines: list[str] = []
-
-    for i, ps in enumerate(state.task_plan.steps):
-        if i < state.current_plan_step_idx:
-            completed_lines.append(f"  - Step {ps.step_id}: {ps.action} [DONE]")
-        elif i == state.current_plan_step_idx:
-            partial = ""
-            if state.step_accumulated_results:
-                partial = "; ".join(
-                    r[:300] for r in state.step_accumulated_results[-3:]
-                )
-            current_line = f"  - Step {ps.step_id}: {ps.action} [IN PROGRESS]" + (
-                f"\n    Done so far: {partial}" if partial else ""
-            )
-        else:
-            remaining_lines.append(f"  - Step {ps.step_id}: {ps.action} [PENDING]")
-
-    content = POST_COMPACTION_STATE.format(
-        goal=state.task_plan.goal,
-        completed_steps="\n".join(completed_lines) if completed_lines else "  (none)",
-        current_step=current_line,
-        remaining_steps="\n".join(remaining_lines) if remaining_lines else "  (none)",
-    )
-    return {"role": "system", "content": content}
-
-
 async def _append_messages(
-    ctx: Any,
+    ctx: ContextManager | None,
     messages: list[dict[str, Any]],
     new_msgs: list[dict[str, Any]],
-    state: AgentRunState | None = None,
 ) -> list[dict[str, Any]]:
     """Append messages via ContextManager if available, else plain concat.
 
-    When ``state`` is provided, builds plan_status for smarter compaction
-    and injects a structured plan state message after compaction occurs.
+    ContextManager.append() 只做纯追加 + token 计数。
+    压缩由 prepare_for_api() 在 LLM 调用前处理。
     """
     if ctx is not None:
-        plan_status = _build_plan_status(state) if state else ""
-        result = await ctx.append(messages, new_msgs, plan_status=plan_status)
-
-        if state and ctx.consume_compacted_flag():
-            post_msg = _build_post_compaction_msg(state)
-            if post_msg:
-                result = list(result) + [post_msg]
-                logger.info("Injected post-compaction plan state into messages")
-
-        return result
+        return await ctx.append(messages, new_msgs)
     return list(messages) + new_msgs
+
+
+async def _prepare_messages(
+    ctx: ContextManager | None,
+    messages: list[dict[str, Any]],
+    state: AgentRunState,
+    *,
+    force_compact: bool = False,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Pre-API Pipeline: run prepare_for_api if ContextManager available.
+
+    Returns:
+        (processed_messages, compact_trigger) — compact_trigger 为触发压缩的策略名称或 None
+    """
+    if ctx is not None and hasattr(ctx, "_pipeline") and ctx._pipeline is not None:
+        result = await ctx._pipeline.prepare_for_api(
+            messages,
+            state_messages_ref=state.messages,
+            force_compact=force_compact,
+        )
+        compact_trigger: str | None = None
+        if hasattr(result, "compact_trigger") and result.compact_trigger:
+            compact_trigger = str(result.compact_trigger)
+        if hasattr(result, "was_compacted") and result.was_compacted:
+            if hasattr(result, "tokens_after"):
+                ctx._total_tokens = result.tokens_after
+        return result.messages_for_api, compact_trigger
+    return messages, None

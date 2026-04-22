@@ -1,4 +1,4 @@
-"""Prompt-only test: render SkillExecutor prompt with runtime paths.
+"""Prompt-only test: render SkillAgent prompt with runtime paths.
 
 Run:
   python scripts/test_skill_execute_prompt.py
@@ -11,7 +11,8 @@ import json
 from pathlib import Path
 
 from bootstrap import bootstrap
-from core.skill.execution.executor import SkillExecutor
+from core.skill.execution import SkillAgent
+from core.skill.execution.state import ReActState
 from core.skill.schema import Skill
 from middleware.config import g_config
 
@@ -33,7 +34,9 @@ def _make_skill() -> Skill:
 
 async def main() -> None:
     await bootstrap()
-    executor = SkillExecutor()
+    from shared.schema import SkillConfig
+    config = SkillConfig.from_global_config()
+    agent = SkillAgent(config=config)
     skill = _make_skill()
 
     session_id = "default"
@@ -49,9 +52,21 @@ async def main() -> None:
     print("== Path Info ==")
     print(json.dumps(path_info, indent=2, ensure_ascii=False))
 
-    print("\n== Prompt (rendered) ==")
-    prompt = executor._build_prompt(skill, "test prompt for sandbox and tool paths")
-    print(prompt)
+    print("\n== Messages (rendered) ==")
+    state = ReActState(
+        query="test prompt for sandbox and tool paths",
+        params={},
+        max_turns=30,
+    )
+    workspace = Path(path_info["workspace_dir"])
+    messages = agent._build_messages(skill, state, workspace)
+    for msg in messages:
+        print(f"\n[{msg['role']}]")
+        content = msg.get("content", "")
+        if isinstance(content, str) and len(content) > 500:
+            print(content[:500] + "...")
+        else:
+            print(content)
 
 
 if __name__ == "__main__":

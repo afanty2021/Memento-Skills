@@ -89,6 +89,7 @@ class ConversationInfo:
 
     id: str
     session_id: str
+    conversation_id: str
     sequence: int
     role: str
     title: str
@@ -122,6 +123,7 @@ class ConversationInfo:
         return cls(
             id=obj.id,
             session_id=obj.session_id,
+            conversation_id=obj.conversation_id,
             sequence=obj.sequence,
             role=obj.role,
             title=obj.title,
@@ -149,6 +151,7 @@ class ConversationInfo:
         return cls(
             id=data["id"],
             session_id=data["session_id"],
+            conversation_id=data["conversation_id"],
             sequence=data["sequence"],
             role=data["role"],
             title=data["title"],
@@ -167,6 +170,7 @@ class ConversationInfo:
         return {
             "id": self.id,
             "session_id": self.session_id,
+            "conversation_id": self.conversation_id,
             "sequence": self.sequence,
             "role": self.role,
             "title": self.title,

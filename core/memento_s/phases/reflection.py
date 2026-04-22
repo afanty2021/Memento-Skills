@@ -13,16 +13,19 @@ from __future__ import annotations
 import json
 import re
 from enum import StrEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel
+if TYPE_CHECKING:
+    from ..state import AgentRunState
+
+from pydantic import BaseModel, ValidationError
 
 from core.prompts.templates import REFLECTION_PROMPT
 from middleware.llm import LLMClient
 from utils.debug_logger import log_agent_phase
 from utils.logger import get_logger
 
-from ..schemas import AgentConfig
+from ..schemas import AgentRuntimeConfig
 from ..utils import extract_json
 from .planning import PlanStep, TaskPlan
 
@@ -63,24 +66,38 @@ async def reflect(
     step_result: str,
     remaining_steps: list[PlanStep],
     llm: LLMClient,
-    config: AgentConfig | None = None,
+    config: AgentRuntimeConfig | None = None,
     context_messages: list[dict[str, Any]] | None = None,
-    react_budget_exhausted: bool = False,
     react_iteration: int = 0,
-    max_react_per_step: int = 5,
-    replan_count: int = 0,
-    max_replans: int = 2,
     reflection_history: list[str] | None = None,
+    state: AgentRunState | None = None,
 ) -> ReflectionResult:
     """Reflect on step execution with budget-aware constraints.
 
     Parameters:
-        react_iteration / max_react_per_step: Per-step react loop bounds.
-        replan_count / max_replans: Global replan counters.
+        react_iteration: Current react iteration within the step.
         reflection_history: Previous reflection decisions for dedup.
+        state: AgentRunState — when provided, max_react_per_step, replan_count,
+            and max_replans are read from state.config; otherwise defaults are used.
+
+    Constraint overrides (applied internally):
+        - IN_PROGRESS → CONTINUE when react budget exhausted
+        - REPLAN → CONTINUE when replan budget exhausted
     """
-    cfg = config or AgentConfig()
+    cfg = config or AgentRuntimeConfig()
     _reflection_history = reflection_history or []
+
+    # Derive constraint values from state when available
+    if state is not None:
+        max_react_per_step = state.config.max_react_per_step
+        react_budget_exhausted = react_iteration >= max_react_per_step
+        replan_count = state.replan_count
+        max_replans = state.config.max_replans
+    else:
+        max_react_per_step = 5
+        react_budget_exhausted = False
+        replan_count = 0
+        max_replans = 2
 
     plan_str = "\n".join(
         f"  Step {s.step_id}: {s.action} -> {s.expected_output}"
@@ -134,6 +151,24 @@ async def reflect(
                 match = re.search(r"\d+", step_id)
                 data["completed_step_id"] = int(match.group()) if match else None
 
+        # ── Field guard: if decision missing, try to infer from other fields ──
+        if "decision" not in data:
+            logger.warning(
+                "[Reflection] LLM response missing 'decision' field. "
+                "Got keys: {}. Falling back to CONTINUE.",
+                list(data.keys()),
+            )
+            is_error = _looks_like_error(step_result)
+            fallback = ReflectionDecision.REPLAN if is_error else ReflectionDecision.CONTINUE
+            return ReflectionResult(
+                decision=fallback,
+                reason=(
+                    f"LLM response missing 'decision'. "
+                    f"Falling back to {fallback}. Response keys: {list(data.keys())}"
+                ),
+                completed_step_id=current_step.step_id if current_step else None,
+            )
+
         result = ReflectionResult(**data)
 
         # ── Hard constraints override ──
@@ -153,19 +188,48 @@ async def reflect(
         )
         return result
 
+    except ValidationError as e:
+        # Pydantic validation error — LLM returned malformed JSON structure
+        logger.warning(
+            "[Reflection] ValidationError: {}. Falling back.",
+            e,
+        )
+        is_error = _looks_like_error(step_result)
+        fallback = ReflectionDecision.REPLAN if is_error else ReflectionDecision.CONTINUE
+        return ReflectionResult(
+            decision=fallback,
+            reason=f"Reflection ValidationError ({e}), falling back to {fallback}",
+            completed_step_id=current_step.step_id if current_step else None,
+        )
+
+    except (ValueError, json.JSONDecodeError) as e:
+        # extract_json failed — LLM didn't return valid JSON
+        logger.warning(
+            "[Reflection] LLM did not return valid JSON ({}). Falling back to CONTINUE.",
+            e,
+        )
+        is_error = _looks_like_error(step_result)
+        fallback = ReflectionDecision.REPLAN if is_error else ReflectionDecision.CONTINUE
+        return ReflectionResult(
+            decision=fallback,
+            reason=f"Reflection LLM response invalid JSON ({e}), falling back to {fallback}",
+            completed_step_id=current_step.step_id if current_step else None,
+        )
+
     except Exception as e:
         logger.warning("Reflection failed, defaulting: {}", e)
+        is_error = _looks_like_error(step_result)
+        fallback = ReflectionDecision.REPLAN if is_error else ReflectionDecision.CONTINUE
         if remaining_steps:
-            fallback = ReflectionDecision.REPLAN if _looks_like_error(step_result) else ReflectionDecision.CONTINUE
             return ReflectionResult(
                 decision=fallback,
                 reason=f"Reflection error ({e}), falling back to {fallback}",
-                completed_step_id=current_step.step_id,
+                completed_step_id=current_step.step_id if current_step else None,
             )
         return ReflectionResult(
             decision=ReflectionDecision.FINALIZE,
             reason=f"Reflection error ({e}), no remaining steps",
-            completed_step_id=current_step.step_id,
+            completed_step_id=current_step.step_id if current_step else None,
         )
 
 

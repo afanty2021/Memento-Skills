@@ -50,7 +50,15 @@ from typing import Any, Dict, Optional
 _instance_counter = 0
 
 # Add 3rd party SDK to path before importing
-_3RD_DIR = Path(__file__).resolve().parent.parent.parent.parent.parent / "3rd"
+# Support both frozen (PyInstaller) and source modes
+_IS_FROZEN = getattr(sys, 'frozen', False)
+_MEIPASS_DIR = getattr(sys, '_MEIPASS', None)
+
+if _IS_FROZEN and _MEIPASS_DIR:
+    _3RD_DIR = Path(_MEIPASS_DIR) / "3rd"
+else:
+    _3RD_DIR = Path(__file__).resolve().parent.parent.parent.parent.parent / "3rd"
+
 if str(_3RD_DIR) not in sys.path:
     sys.path.insert(0, str(_3RD_DIR))
 
@@ -119,6 +127,7 @@ class WechatIlinkaiAdapter(BaseChannelAdapter):
         account_id: str = "default",
         base_url: str = "https://ilinkai.weixin.qq.com",
         token: Optional[str] = None,
+        **kwargs,  # 接受额外的配置字段
     ):
         super().__init__()
 
@@ -649,21 +658,14 @@ class WechatIlinkaiAdapter(BaseChannelAdapter):
             # Stop typing indicator after message is sent
             if stop_typing:
                 stop_typing.set()
-                if typing_task:
-                    try:
-                        await asyncio.wait_for(typing_task, timeout=2.0)
-                    except asyncio.TimeoutError:
-                        typing_task.cancel()
-                        try:
-                            await typing_task
-                        except asyncio.CancelledError:
-                            pass
-                    logger.info(
-                        f"[WechatIlinkaiAdapter#{self._instance_id}] Stopped typing indicator for {chat_id}"
-                    )
-                # Remove from active tasks
+                # Don't await typing_task - it may be from a different event loop.
+                # Setting stop_typing.set() will cause _typing_keepalive to exit.
+                # Just remove from active tasks - cleanup happens via stop_event.wait()
                 if chat_id in self._active_typing_tasks:
                     del self._active_typing_tasks[chat_id]
+                logger.info(
+                    f"[WechatIlinkaiAdapter#{self._instance_id}] Stopped typing indicator for {chat_id}"
+                )
 
     async def reply_message(
         self, message_id: str, content: str, chat_id: str = "", **kwargs

@@ -1,5 +1,5 @@
 {
-  "version": "0.2.0",
+  "version": "0.3.0",
   "app": {
     "name": "Memento-S",
     "theme_options": {
@@ -44,11 +44,11 @@
       "reranker_min_score": 0.001
     },
     "execution": {
-      "timeout_sec": 300,
+      "timeout_sec": 3600,
       "max_reflection_retries": 3,
       "sandbox_provider": "uv",
       "uv_python_version": "3.12",
-      "bash_timeout_sec": 300,
+      "bash_timeout_sec": 3600,
       "pip_install_timeout_sec": 180,
       "cli_install_timeout_sec": 300,
       "max_attempts": 3,
@@ -64,7 +64,8 @@
     "path_validation_enabled": false
   },
   "logging": {
-    "level": "INFO"
+    "level": "DEBUG",
+    "verbose": true
   },
   "agent": {
     "max_iterations": 100
@@ -82,5 +83,20 @@
   },
   "auth": {
     "base_url": "https://ota.yangtzeailab.com/"
+  },
+  "dream": {
+    "enabled": true,
+    "min_hours": 24,
+    "min_sessions": 2,
+    "poll_interval_seconds": 600,
+    "scan_interval_seconds": 600
+  },
+  "memory": {
+    "enabled": true,
+    "min_staging_sessions": 5,
+    "min_staging_bytes": 10000,
+    "max_tokens_per_call": 2000,
+    "poll_interval_seconds": 60,
+    "priority_topics": []
   }
 }

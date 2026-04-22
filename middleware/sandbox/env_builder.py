@@ -80,8 +80,27 @@ def build_env(
         current_path = env.get("PATH", os.environ.get("PATH", ""))
         env["PATH"] = f"{venv_bin}{os.pathsep}{current_path}"
 
-    # Add extra variables (highest priority)
+    # Merge extra variables into env.
+    # Special handling for PATH: sandbox PATH takes priority, extra PATH is
+    # appended so any user-injected paths (e.g. from _get_safe_env_paths) are
+    # available but never shadow the venv.  This avoids a wholesale override
+    # that would drop the venv bin directory from the bash tool's safe PATH.
     if extra:
+        extra_path = extra.pop("PATH", None)
         env.update(extra)
+        if extra_path is not None:
+            path_sep = ";" if os.name == "nt" else ":"
+            # sandbox PATH is already in env from the block above; merge
+            sandbox_path = env.get("PATH", "")
+            # dedup: keep sandbox part intact, append unique extra parts
+            sandbox_parts = [p.strip() for p in sandbox_path.split(path_sep) if p.strip()]
+            extra_parts = [p.strip() for p in extra_path.split(path_sep) if p.strip()]
+            seen: set[str] = {os.path.normpath(p) for p in sandbox_parts}
+            merged_parts = list(sandbox_parts)
+            for p in extra_parts:
+                if os.path.normpath(p) not in seen:
+                    merged_parts.append(p)
+                    seen.add(os.path.normpath(p))
+            env["PATH"] = path_sep.join(merged_parts)
 
     return env

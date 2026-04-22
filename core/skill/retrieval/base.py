@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from .schema import RecallCandidate
+from shared.schema import SkillSearchResult
 
 
 class BaseRecall(ABC):
@@ -24,7 +24,7 @@ class BaseRecall(ABC):
         ...
 
     @abstractmethod
-    async def search(self, query: str, k: int = 10, **kwargs) -> list[RecallCandidate]:
+    async def search(self, query: str, k: int = 10, **kwargs) -> list[SkillSearchResult]:
         """执行召回搜索
 
         Args:
@@ -33,7 +33,7 @@ class BaseRecall(ABC):
             **kwargs: 额外参数，由具体实现决定
 
         Returns:
-            RecallCandidate 列表
+            SkillSearchResult 列表
         """
         ...
 

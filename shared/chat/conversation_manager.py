@@ -47,7 +47,10 @@ class ConversationManager(_ServiceManager[ConversationService]):
         title: str,
         content: str,
         *,
+        id: str | None = None,
+        conversation_id: str | None = None,
         meta_info: dict[str, Any] | None = None,
+        content_detail: dict[str, Any] | None = None,
         tokens: int = 0,
         tool_calls: list[dict] | None = None,
         tool_call_id: str | None = None,
@@ -59,7 +62,10 @@ class ConversationManager(_ServiceManager[ConversationService]):
             role: 角色（user/assistant/system/tool）
             title: 标题（内容预览）
             content: 内容
+            id: 自定义 Conversation ID（为 None 时自动生成 UUID）
+            conversation_id: 对话轮次ID（同一轮对话的多条记录共享）
             meta_info: 元数据
+            content_detail: 按 UniResponse 格式存储的结构化内容
             tokens: Token 数量
             tool_calls: 工具调用列表
             tool_call_id: 关联的工具调用 ID
@@ -68,11 +74,14 @@ class ConversationManager(_ServiceManager[ConversationService]):
             创建的 Conversation 信息
         """
         data = ConversationCreate(
+            id=id,
             session_id=session_id,
+            conversation_id=conversation_id,
             role=role,
             title=title,
             content=content,
             meta_info=meta_info or {},
+            content_detail=content_detail,
             tokens=tokens,
             tool_calls=tool_calls,
             tool_call_id=tool_call_id,
@@ -176,15 +185,9 @@ class ConversationManager(_ServiceManager[ConversationService]):
         session_id: str,
         limit: int = 100,
     ) -> list[dict[str, Any]]:
-        """获取对话历史（用于 LLM 上下文）.
+        """获取对话历史（用于 LLM 上下文）。
 
-        Args:
-            session_id: Session ID
-            limit: 最大返回消息数
-
-        Returns:
-            消息字典列表，格式:
-            [{"role": "...", "content": "...", "conversation_id": "..."}, ...]
+        返回 role/content/tool_calls/tool_call_id 字段，供 LLM messages 使用。
         """
         conversations = await self.list_by_session(
             session_id, limit, exclude_tool=False
@@ -195,8 +198,6 @@ class ConversationManager(_ServiceManager[ConversationService]):
             msg: dict[str, Any] = {
                 "role": conv.role,
                 "content": conv.content,
-                "conversation_id": conv.id,
-                "tokens": conv.tokens,
             }
             if conv.tool_call_id:
                 msg["tool_call_id"] = conv.tool_call_id

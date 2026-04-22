@@ -11,7 +11,7 @@ import httpx
 
 from utils.logger import get_logger
 from .base import BaseRecall
-from .schema import RecallCandidate
+from shared.schema import SkillSearchResult
 
 logger = get_logger(__name__)
 
@@ -23,31 +23,47 @@ class RemoteRecall(BaseRecall):
     - POST /api/v1/search    — 检索 skill，返回 top-k 的 name + description
     """
 
-    def __init__(self, base_url: str, timeout: float = 10.0):
+    def __init__(self, base_url: str, timeout: float = 10.0) -> None:
         self._base_url = base_url.rstrip("/")
-        self._client = httpx.Client(timeout=timeout,verify=certifi.where(),trust_env=False)
+        self._timeout = timeout
+        self._client: httpx.AsyncClient = httpx.AsyncClient(
+            timeout=timeout,
+            verify=certifi.where(),
+            trust_env=False,
+        )
         self._embedding_ready: bool = False
         self._size: int = 0
+        self._available: bool = False
 
-        # 健康检查
+    async def _health_check(self) -> None:
+        """启动时健康检查，填充元数据并设置可用性标记。"""
+        import asyncio
         try:
-            resp = self._client.get(f"{self._base_url}/health")
+            resp = await asyncio.wait_for(
+                self._client.get(f"{self._base_url}/health"),
+                timeout=self._timeout,
+            )
             if resp.status_code == 200:
                 data = resp.json()
                 self._embedding_ready = data.get("embedding_ready", False)
                 self._size = data.get("catalog_size", 0) or data.get("total_skills", 0)
+                self._available = True
                 logger.info(
                     "RemoteRecall connected: {} (skills={}, embedding={})",
                     self._base_url,
                     self._size,
                     self._embedding_ready,
                 )
+            else:
+                self._available = False
+                logger.warning("RemoteRecall health check returned HTTP {}", resp.status_code)
         except Exception as e:
+            self._available = False
             logger.warning("RemoteRecall health check failed: {}", e)
 
     @classmethod
-    def from_config(cls, config: "SkillConfig") -> "RemoteRecall | None":
-        """从配置创建 RemoteRecall 实例
+    async def from_config(cls, config: "SkillConfig") -> "RemoteRecall | None":
+        """从配置异步创建 RemoteRecall 实例。
 
         Args:
             config: SkillConfig 配置
@@ -56,7 +72,9 @@ class RemoteRecall(BaseRecall):
             RemoteRecall 实例（如果配置了 cloud_catalog_url），否则返回 None
         """
         if config.cloud_catalog_url:
-            return cls(config.cloud_catalog_url)
+            recall = cls(config.cloud_catalog_url, timeout=5.0)
+            await recall._health_check()
+            return recall
         return None
 
     @property
@@ -66,11 +84,7 @@ class RemoteRecall(BaseRecall):
 
     def is_available(self) -> bool:
         """检查远程服务是否可用"""
-        try:
-            resp = self._client.get(f"{self._base_url}/health")
-            return resp.status_code == 200
-        except Exception:
-            return False
+        return self._available
 
     @property
     def embedding_ready(self) -> bool:
@@ -80,10 +94,10 @@ class RemoteRecall(BaseRecall):
     def size(self) -> int:
         return self._size
 
-    async def search(self, query: str, k: int = 5, **kwargs) -> list["RecallCandidate"]:
-        """搜索 skill，返回 RecallCandidate 列表。"""
+    async def search(self, query: str, k: int = 5, **kwargs) -> list["SkillSearchResult"]:
+        """搜索 skill，返回 SkillSearchResult 列表。"""
         try:
-            resp = self._client.post(
+            resp = await self._client.post(
                 f"{self._base_url}/api/v1/search",
                 json={"query": query, "top_k": k},
             )
@@ -92,13 +106,13 @@ class RemoteRecall(BaseRecall):
                 return []
 
             results = resp.json().get("results", [])
-            candidates: list[RecallCandidate] = []
+            candidates: list[SkillSearchResult] = []
             for r in results:
                 candidates.append(
-                    RecallCandidate(
+                    SkillSearchResult(
                         name=r["name"],
                         description=r.get("description", ""),
-                        source="remote",
+                        source="cloud",  # "remote" → "cloud"
                         score=r.get("score", 0.0),
                         match_type="remote",
                     )
@@ -120,6 +134,7 @@ class RemoteRecall(BaseRecall):
         )
         return stats
 
-    def close(self) -> None:
+    async def close(self) -> None:
         """关闭 HTTP 客户端连接"""
-        self._client.close()
+        await self._client.aclose()
+

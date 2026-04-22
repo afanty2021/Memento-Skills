@@ -7,6 +7,7 @@ metadata:
     - pypdf
     - pdfplumber
     - reportlab
+    - pypdfium2
 ---
 
 # PDF Skill — Action Routing
@@ -23,6 +24,7 @@ Before doing anything, classify the user's request and follow the MANDATORY acti
 | **Merge/split/rotate/encrypt PDFs** | Use `bash` with pypdf |
 | **Extract tables from a PDF** | Use `bash` with pdfplumber |
 | **Fill a PDF form** | Read FORMS.md first |
+| **OCR / read text from scanned PDF** | Convert to images → **`python_repl` with vision LLM** (see OCR below) |
 
 ---
 
@@ -126,6 +128,38 @@ doc.build(story)
 
 **IMPORTANT**: Never use Unicode subscript/superscript characters in ReportLab. Use `<sub>` and `<super>` tags instead.
 
+## OCR Scanned PDFs (via Vision LLM)
+
+When `pdfplumber.extract_text()` returns empty or garbled text, the PDF is likely scanned/image-based. Use `python_repl` with a vision-capable LLM to analyze the converted images:
+
+**Step 1**: Convert all PDF pages to images:
+```
+bash: python <skill_path>/scripts/convert_pdf_to_images.py <input.pdf> <output_dir>
+```
+
+**Step 2**: Use `python_repl` to call the vision LLM for OCR on the images:
+```python
+import base64, os, json
+
+image_dir = "<output_dir>"
+images = sorted([f for f in os.listdir(image_dir) if f.lower().endswith(('.png','.jpg','.jpeg'))])
+
+results = []
+for img_file in images:
+    path = os.path.join(image_dir, img_file)
+    with open(path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode()
+    # Call your vision-capable LLM here (e.g. via API)
+    # Return the extracted text for each image
+    results.append({"file": img_file, "text": extracted_text})
+
+print(json.dumps(results, ensure_ascii=False, indent=2))
+```
+
+Images are batched into minimal LLM calls automatically (up to 8 per call).
+
+---
+
 ## Quick Reference
 
 | Task | Tool | Method |
@@ -136,7 +170,7 @@ doc.build(story)
 | Merge/split/rotate | pypdf | PdfReader + PdfWriter |
 | Create from scratch | reportlab | SimpleDocTemplate |
 | Fill forms | see FORMS.md | — |
-| OCR scanned | pytesseract + pdf2image | Convert to image first |
+| OCR scanned | **`python_repl` + vision LLM** | Convert pages to images → call vision LLM via `python_repl` |
 
 ## References
 - FORMS.md — PDF form filling

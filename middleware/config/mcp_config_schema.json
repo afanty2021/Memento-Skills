@@ -1,0 +1,134 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MCP Config Schema",
+  "description": "MCP 服务器配置格式验证。transport 字段显式指定传输方式（stdio/streamable_http）。",
+  "type": "object",
+  "properties": {
+    "enabled": {
+      "type": "boolean",
+      "description": "全局启用/禁用所有 MCP 服务器",
+      "default": true
+    },
+    "mcp": {
+      "type": "object",
+      "description": "MCP 服务器列表，key 为 server name",
+      "additionalProperties": {
+        "$ref": "#/definitions/McpServerConfig"
+      }
+    }
+  },
+  "definitions": {
+    "McpServerConfig": {
+      "type": "object",
+      "description": "单个 MCP 服务器配置",
+      "properties": {
+        "transport": {
+          "type": "string",
+          "enum": ["stdio", "streamable_http"],
+          "description": "传输方式：stdio=本地子进程，streamable_http=HTTP 远程",
+          "default": "stdio"
+        },
+        "command": {
+          "type": "string",
+          "description": "可执行程序路径（如 npx、python、node）。stdio 模式必需。"
+        },
+        "args": {
+          "type": "array",
+          "description": "启动参数列表（如 ['-y', '@modelcontextprotocol/server-github']）",
+          "items": { "type": "string" },
+          "default": []
+        },
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "description": "远程 MCP 服务器 URL（如 https://mcp.example.com/mcp）。streamable_http 模式必需。"
+        },
+        "environment": {
+          "type": "object",
+          "description": "环境变量（仅 stdio 模式有效，key: value）",
+          "default": {},
+          "additionalProperties": { "type": ["string", "null"] }
+        },
+        "headers": {
+          "type": "object",
+          "description": "随请求发送的 HTTP 请求头（仅 streamable_http 模式有效）。",
+          "default": {},
+          "additionalProperties": { "type": "string" }
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "启用/禁用该服务器",
+          "default": true
+        },
+        "timeout": {
+          "type": "integer",
+          "description": "超时时间（毫秒）。默认 5000。streamable_http 模式有效。",
+          "default": 5000
+        },
+        "authToken": {
+          "type": "string",
+          "description": "Bearer Token。streamable_http 模式有效。也可在 headers 中配置 Authorization。"
+        },
+        "oauth": {
+          "oneOf": [
+            { "$ref": "#/definitions/OAuthConfig" },
+            { "type": "boolean", "enum": [false] }
+          ],
+          "description": "OAuth 身份验证配置，设为 false 可禁用自动 OAuth（仅 streamable_http 模式有效）。"
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": { "properties": { "transport": { "const": "stdio" } } },
+          "then": {
+            "required": ["command"],
+            "properties": {
+              "transport": {},
+              "command": {},
+              "args": {},
+              "environment": {},
+              "enabled": {},
+              "timeout": {}
+            }
+          }
+        },
+        {
+          "if": { "properties": { "transport": { "const": "streamable_http" } } },
+          "then": {
+            "required": ["url"],
+            "properties": {
+              "transport": {},
+              "url": {},
+              "headers": {},
+              "enabled": {},
+              "timeout": {},
+              "authToken": {},
+              "oauth": {}
+            }
+          }
+        }
+      ]
+    },
+    "OAuthConfig": {
+      "type": "object",
+      "description": "OAuth 身份验证配置（仅 streamable_http 模式）。",
+      "properties": {
+        "clientId": {
+          "type": "string",
+          "description": "OAuth 客户端 ID"
+        },
+        "clientSecret": {
+          "type": "string",
+          "description": "OAuth 客户端密钥"
+        },
+        "scope": {
+          "type": "string",
+          "description": "授权时请求的 OAuth 作用域"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

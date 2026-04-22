@@ -5,6 +5,15 @@ from __future__ import annotations
 from enum import StrEnum
 
 
+class IntentMode(StrEnum):
+    """Four-way intent classification."""
+
+    DIRECT = "direct"
+    AGENTIC = "agentic"
+    CONFIRM = "confirm"
+    INTERRUPT = "interrupt"
+
+
 class PhaseSignalType(StrEnum):
     """Semantic signal types that agent phases can emit."""
 
@@ -59,3 +68,4 @@ class AgentFinishReason(StrEnum):
     ERROR_POLICY_ABORT = "execute_skill_abort"
     ERROR_POLICY_PROMPT = "execute_skill_prompt_user"
     ERROR = "error"
+    CANCELLED = "cancelled"

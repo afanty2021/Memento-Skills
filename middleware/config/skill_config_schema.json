@@ -1,0 +1,80 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "skill_config_schema.json",
+  "title": "Memento-S Skill Configuration Schema",
+  "description": "Local skill registry schema for Memento-S",
+  "type": "object",
+  "required": ["version", "skills"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "version": {
+      "type": "integer",
+      "const": 1
+    },
+    "skills": {
+      "type": "object",
+      "description": "Skill registry, key is kebab-case skill name",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["location", "source"],
+        "properties": {
+          "location": {
+            "type": "string",
+            "description": "Absolute path to the skill directory on disk, e.g. /Users/manson/memento_s/skills/my-skill"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Skill version number",
+            "default": 1
+          },
+          "installed_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO-8601 timestamp when the skill was installed"
+          },
+          "source": {
+            "type": "string",
+            "enum": ["builtin", "local", "cloud"],
+            "description": "Where the skill originated: local (user-created), builtin (built-in), cloud (downloaded)"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["active", "disabled"],
+            "description": "Whether the skill is enabled",
+            "default": "active"
+          },
+          "tags": {
+            "type": "array",
+            "description": "Optional tags for filtering and keyword matching",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "index": {
+      "type": "object",
+      "properties": {
+        "last_sync": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "ISO-8601 timestamp of the last sync from disk"
+        },
+        "sync_errors": {
+          "type": "array",
+          "description": "Errors encountered during the last sync",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

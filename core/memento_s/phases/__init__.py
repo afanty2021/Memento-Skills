@@ -3,7 +3,8 @@
 Import order matters: each line only depends on modules already loaded above.
 """
 
-from .intent import IntentMode, IntentResult, recognize_intent
+from core.protocol import IntentMode
+from .intent import IntentResult, recognize_intent
 from .planning import PlanContext, PlanStep, SkillBrief, TaskPlan, generate_plan, validate_plan
 from .reflection import ReflectionResult, reflect
 from .state import AgentRunState

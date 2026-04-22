@@ -76,5 +76,11 @@
     "websocket_port": 8765,
     "webhook_host": "127.0.0.1",
     "webhook_port": 18080
+  },
+  "ota": {
+    "auto_check": true,
+    "auto_download": true,
+    "check_interval_hours": 24,
+    "install_confirmation": true
   }
 }

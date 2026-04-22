@@ -36,7 +36,6 @@ class ChatManager:
         )
     """
 
-    _instance: ChatManager | None = None
     _session_manager: SessionManager | None = None
     _conversation_manager: ConversationManager | None = None
 
@@ -164,7 +163,10 @@ class ChatManager:
         title: str,
         content: str,
         *,
+        id: str | None = None,
+        conversation_id: str | None = None,
         meta_info: dict[str, Any] | None = None,
+        content_detail: dict[str, Any] | None = None,
         tokens: int = 0,
         tool_calls: list[dict] | None = None,
         tool_call_id: str | None = None,
@@ -172,10 +174,13 @@ class ChatManager:
         """创建新 Conversation."""
         return await cls._get_conversation_manager().create(
             session_id=session_id,
+            conversation_id=conversation_id,
             role=role,
             title=title,
             content=content,
+            id=id,
             meta_info=meta_info,
+            content_detail=content_detail,
             tokens=tokens,
             tool_calls=tool_calls,
             tool_call_id=tool_call_id,

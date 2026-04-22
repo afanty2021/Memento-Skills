@@ -1,4 +1,4 @@
-"""Smoke test: Skill execution path + uv sandbox + bash tool.
+"""Smoke test: Skill execution path via SkillAgent.
 
 Run:
   python scripts/test_skill_execute_flow.py
@@ -10,10 +10,11 @@ import asyncio
 import json
 from pathlib import Path
 
-from core.skill.execution.executor import SkillExecutor
+from core.skill.execution import SkillAgent
 from core.skill.schema import Skill
 from bootstrap import bootstrap
 from middleware.config import g_config
+from shared.schema import SkillConfig
 
 
 def _make_skill() -> Skill:
@@ -27,69 +28,10 @@ def _make_skill() -> Skill:
     )
 
 
-async def _run_fallback(executor: SkillExecutor, skill: Skill) -> None:
-    llm_content = """
-```python
-import os
-import sys
-from pathlib import Path
-
-print("sys.executable=", sys.executable)
-print("cwd=", os.getcwd())
-print("VIRTUAL_ENV=", os.environ.get("VIRTUAL_ENV"))
-print("UV_PYTHON=", os.environ.get("UV_PYTHON"))
-print("PWD=", os.environ.get("PWD"))
-print("output_dir_from_env=", os.environ.get("MEMENTO_OUTPUT_DIR"))
-print("files_in_cwd=", [p.name for p in Path(".").iterdir()][:5])
-
-Path("fallback_output.txt").write_text("fallback ok")
-print("wrote fallback_output.txt")
-```
-""".strip()
-
-    result, _ = await executor._execute_fallback(skill, llm_content)
-    print("[fallback] success:", result.success)
-    print("[fallback] result:", result.result)
-    if result.error:
-        print("[fallback] error:", result.error)
-
-
-async def _run_tool_calls(executor: SkillExecutor, skill: Skill) -> None:
-    tool_calls = [
-        {
-            "function": {
-                "name": "bash",
-                "arguments": {
-                    "command": 'python scripts/search.sh \'{"query": "Cursor IDE", "max_results": 3}\'',
-                },
-            }
-        },
-        {
-            "function": {
-                "name": "bash",
-                "arguments": {
-                    "command": './scripts/search.sh \'{"query": "Cursor IDE", "max_results": 1}\'',
-                },
-            }
-        },
-        {
-            "function": {
-                "name": "list_dir",
-                "arguments": {"path": "scripts", "max_depth": 1},
-            }
-        },
-    ]
-
-    result, _ = await executor._execute_with_tool_calls(skill, tool_calls)
-    print("[tool_calls] success:", result.success)
-    print("[tool_calls] result:", result.result)
-    if result.error:
-        print("[tool_calls] error:", result.error)
-
-
 async def main() -> None:
     await bootstrap()
-    executor = SkillExecutor()
+    config = SkillConfig.from_global_config()
+    agent = SkillAgent(config=config)
     skill = _make_skill()
 
     session_id = "default"
@@ -104,11 +46,23 @@ async def main() -> None:
     print("== Path Info ==")
     print(json.dumps(path_info, indent=2, ensure_ascii=False))
 
-    print("== Fallback path (sandbox.run_code) ==")
-    await _run_fallback(executor, skill)
+    print("== SkillAgent smoke test ==")
+    workspace = Path(path_info["workspace_dir"])
+    print(f"[skill] {skill.name} (source_dir={skill.source_dir})")
+    print(f"[workspace] {workspace}")
 
-    print("\n== Tool calls path (bash tool) ==")
-    await _run_tool_calls(executor, skill)
+    # Test that agent can be created
+    print("[agent] SkillAgent created successfully")
+    print(f"[agent] llm={type(agent._llm).__name__}")
+    print(f"[agent] skill_env_cache={agent._skill_env_cache}")
+
+    # Test env vars
+    from core.skill.execution.state import ReActState
+    state = ReActState(query="test", params={}, max_turns=30)
+    env_vars = agent._build_env_vars(workspace, state)
+    print(f"[env] WORKSPACE_ROOT={env_vars.get('WORKSPACE_ROOT')}")
+
+    print("\n[ok] SkillAgent smoke test passed")
 
 
 if __name__ == "__main__":

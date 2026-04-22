@@ -27,6 +27,7 @@ from cli.commands import (
     feishu_bridge_command,
     dingtalk_bridge_command,
     wecom_bridge_command,
+    wechat_bridge_command,
     im_status_command,
     gateway_worker_command,
     wechat_app,
@@ -121,6 +122,12 @@ def wecom() -> None:
 
 # Add wechat subcommand app
 app.add_typer(wechat_app, name="wechat", help="WeChat management commands")
+
+
+@app.command()
+def wechat() -> None:
+    """Start WeChat (微信) bridge: receive messages and reply via Agent."""
+    wechat_bridge_command()
 
 
 @app.command()

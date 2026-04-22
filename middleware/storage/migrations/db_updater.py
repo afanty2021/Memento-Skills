@@ -12,14 +12,15 @@ logger = logging.getLogger(__name__)
 
 
 def _resolve_runtime_root() -> Path:
-    """Resolve runtime project root for both dev and packaged environments.
+    """解析项目根目录（根据 RuntimeMode）。
 
-    Dev mode:
-        middleware/storage/migrations/db_updater.py -> parents[3] => project root
-    Packaged mode:
-        use sys._MEIPASS as extraction/runtime root
+    Dev 模式: 从当前文件向上查找 parents[3]
+    Production 模式: 使用 sys._MEIPASS
     """
-    if getattr(sys, "frozen", False):
+    from utils.runtime_mode import get_runtime_mode, RuntimeMode
+
+    mode = get_runtime_mode()
+    if mode == RuntimeMode.PRODUCTION:
         base = getattr(sys, "_MEIPASS", None)
         if not base:
             raise RuntimeError("Packaged runtime detected but sys._MEIPASS is missing")
@@ -28,7 +29,7 @@ def _resolve_runtime_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
-def run_auto_upgrade(db_url: str) -> None:
+def run_migrations_to_head(db_url: str) -> None:
     """Programmatically run Alembic upgrade to head.
 
     Must be called before UI startup.

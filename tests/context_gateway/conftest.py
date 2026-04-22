@@ -11,9 +11,9 @@ from pathlib import Path
 
 import pytest
 
-from core.context.schemas import ContextConfig
+from core.context.config import ContextManagerConfig
 from core.context.scratchpad import Scratchpad
-from core.context.manager import ContextManager
+from core.context import ContextManager, SessionContext
 from middleware.config import g_config
 
 
@@ -24,8 +24,8 @@ def _ensure_config_loaded() -> None:
 
 
 @pytest.fixture
-def ctx_cfg() -> ContextConfig:
-    return ContextConfig()
+def ctx_cfg() -> ContextManagerConfig:
+    return ContextManagerConfig()
 
 
 @pytest.fixture
@@ -54,13 +54,19 @@ def scratchpad(date_dir: Path) -> Scratchpad:
 
 
 @pytest.fixture
-def context_manager(tmp_dir: Path, ctx_cfg: ContextConfig) -> ContextManager:
+def session_ctx(tmp_dir: Path) -> SessionContext:
+    """Create a SessionContext for testing."""
+    return SessionContext.create("test-session", base_dir=tmp_dir)
+
+
+@pytest.fixture
+def context_manager(tmp_dir: Path, ctx_cfg: ContextManagerConfig, session_ctx: SessionContext) -> ContextManager:
     """Create a real ContextManager pointing at a temp directory."""
     _ensure_config_loaded()
     original = g_config.paths.context_dir
     g_config.paths.context_dir = tmp_dir / "context"
     try:
-        cm = ContextManager(session_id="test-session", config=ctx_cfg)
+        cm = ContextManager(ctx=session_ctx, config=ctx_cfg)
         yield cm
     finally:
         g_config.paths.context_dir = original

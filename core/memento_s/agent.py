@@ -15,42 +15,44 @@ import asyncio
 from collections import OrderedDict
 from dataclasses import dataclass
 from functools import partial
+from pathlib import Path
 from typing import Any, AsyncGenerator
 
-from core.context import ContextManager
-from core.context.block import make_event
-from core.manager.session_context import EnvironmentSnapshot, SessionContext
+import tools as tools_registry
+from infra.service import InfraService, InfraContextConfig
+from core.context.session import SessionGoal, SessionStatus
+from core.context import RuntimeState, RuntimeStateStore
+from core.context.session_context import SessionContext
 from core.protocol import (
     AGUIProtocolAdapter,
     AgentFinishReason,
+    IntentMode,
     RunEmitter,
     StepStatus,
     ToolTranscriptSink,
     new_run_id,
 )
-from shared.chat import ChatManager
+from utils.log_config import log_preview_long
+from shared.security.policy import PolicyManager
 from core.skill.gateway import SkillGateway
-from core.skill.config import SkillConfig
 from middleware.config import g_config
+from middleware.config.mcp_config_manager import g_mcp_config_manager
 from middleware.llm import LLMClient
-from middleware.llm.embedding_client import EmbeddingClient
-from middleware.storage.vector_storage import VectorStorage, SQLITE_VEC_AVAILABLE
+from shared.chat import ChatManager
+from shared.schema import SkillConfig
 from utils.debug_logger import log_agent_phase, log_debug_marker
 from utils.logger import get_logger
-
-from .agent_profile import AgentProfile
+from core.agent_profile import AgentProfile, apm
 from .finalize import stream_and_finalize
 from .phases import (
     AgentRunState,
-    IntentMode,
     generate_plan,
     recognize_intent,
     run_plan_execution,
 )
 from .phases.planning import PlanContext, SkillBrief, validate_plan
-from core.shared import PolicyManager
-from .schemas import AgentConfig
-from .tools import AGENT_TOOL_SCHEMAS, ToolDispatcher
+from .schemas import AgentRuntimeConfig
+from .skill_dispatch import SkillDispatcher
 from .utils import extract_explicit_skill_name
 
 logger = get_logger(__name__)
@@ -92,47 +94,38 @@ async def _persist_tool_to_db(
     content: str,
     tool_call_id: str | None,
     tool_calls: list[dict] | None,
+    *,
+    conversation_id: str | None = None,
 ) -> None:
-    """Persist a tool-call or tool-result message to the database."""
-    await ChatManager.create_conversation(
-        session_id=session_id,
-        role=role,
-        title=title,
-        content=content,
-        tool_call_id=tool_call_id,
-        tool_calls=tool_calls,
-    )
+    """已由 chat_service.py 在 yield 侧统一持久化，此处保留为空操作。"""
 
 
-def _build_plan_context(
-    session_ctx: SessionContext,
-    history: list[dict[str, Any]] | None,
-) -> list[str]:
-    """Build context strings for plan generation.
-
-    Keep planning context path-agnostic to avoid inducing absolute-path hallucinations.
-    """
-    parts: list[str] = []
-    parts.append(
-        "Path policy: avoid absolute paths in planning; prefer session-root relative paths or aliases."
-    )
-    if session_ctx.environment.project_type:
-        parts.append(f"Project type: {session_ctx.environment.project_type}")
-    if history:
-        recent = [
-            f"{m.get('role', '')}: {str(m.get('content', ''))[:100]}"
-            for m in history[-3:]
-        ]
-        parts.append("Recent conversation:\n" + "\n".join(recent))
-    return parts
+def _detect_project_type(path: Path) -> str:
+    """Detect project type from marker files."""
+    markers = {
+        "pyproject.toml": "python",
+        "setup.py": "python",
+        "requirements.txt": "python",
+        "package.json": "node",
+        "Cargo.toml": "rust",
+        "go.mod": "go",
+        "pom.xml": "java",
+        "build.gradle": "java",
+        "Gemfile": "ruby",
+        "composer.json": "php",
+    }
+    for marker, ptype in markers.items():
+        if (path / marker).exists():
+            return ptype
+    return ""
 
 
 @dataclass
 class SessionBundle:
     """Grouped per-session state — avoids two parallel LRU caches."""
 
-    session_ctx: SessionContext
-    context_mgr: ContextManager
+    session_goal: SessionGoal
+    infra: InfraService
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -152,41 +145,64 @@ class MementoSAgent:
         self._gateway = skill_gateway
         self._initialized = skill_gateway is not None
 
-        self.context_manager: ContextManager | None = None
+        self.infra: InfraService | None = None
         self.policy_manager = PolicyManager()
-        self.tool_dispatcher: ToolDispatcher | None = None
+        self.skill_dispatcher: SkillDispatcher | None = None
 
         self._agent_profile: AgentProfile | None = None
         self._agent_profile_skill_hash: int = 0
         self._sessions: OrderedDict[str, SessionBundle] = OrderedDict()
-        self._agent_config = AgentConfig()
+        self._agent_config_raw: AgentRuntimeConfig | None = None
         self._init_lock = asyncio.Lock()
+        self._reply_locks: dict[str, asyncio.Lock] = {}
+        self._cancel_events: dict[str, asyncio.Event] = {}
 
-        # Callback for skill execution step updates (GUI real-time display)
         self._on_skill_step_callback: Any | None = None
 
         if self._initialized and self._gateway is not None:
-            self.tool_dispatcher = ToolDispatcher(
+            self.skill_dispatcher = SkillDispatcher(
                 skill_gateway=self._gateway,
             )
 
-    def reload_llm_config(self) -> None:
-        """重新加载 LLM 配置。
+    @property
+    def _agent_config(self) -> AgentRuntimeConfig:
+        """Lazily build AgentRuntimeConfig from g_config on first access."""
+        if self._agent_config_raw is None:
+            self._agent_config_raw = self._build_agent_config()
+        return self._agent_config_raw
 
-        当模型配置发生变化（如删除模型、切换模型）时调用此方法，
-        确保后续的 LLM 调用使用最新的配置。
-        """
+    def _build_agent_config(self) -> AgentRuntimeConfig:
+        """从 g_config.agent 读取运行时配置。"""
+        from core.context.config import ContextManagerConfig
+        cfg = g_config.load()
+        return AgentRuntimeConfig(
+            max_iterations=cfg.agent.max_iterations,
+            context=ContextManagerConfig(),
+        )
+
+    def reload_llm_config(self) -> None:
+        """重新加载 LLM 配置。"""
         self.llm.reload_config()
 
+    def cancel(self, session_id: str) -> None:
+        """发出取消信号，中止指定 session 的当前任务。"""
+        if session_id not in self._cancel_events:
+            self._cancel_events[session_id] = asyncio.Event()
+        self._cancel_events[session_id].set()
+
+    def is_cancelled(self, session_id: str) -> bool:
+        """检查指定 session 是否已被请求取消。"""
+        ev = self._cancel_events.get(session_id)
+        return ev is not None and ev.is_set()
+
+    def _clear_cancel(self, session_id: str) -> None:
+        """清除取消标志（在新一轮 reply_stream 开始前调用）。"""
+        ev = self._cancel_events.get(session_id)
+        if ev is not None:
+            ev.clear()
+
     def set_on_skill_step(self, callback: Any | None) -> None:
-        """Set callback for skill execution step updates.
-
-        Called during skill execution for each tool call to enable
-        real-time GUI display of execution progress.
-
-        Args:
-            callback: Async function(step_number, tool_name, status, signal, summary)
-        """
+        """Set callback for skill execution step updates."""
         self._on_skill_step_callback = callback
 
     # ── Initialisation ───────────────────────────────────────────────
@@ -200,10 +216,12 @@ class MementoSAgent:
             log_agent_phase("AGENT_INIT", "system", "Creating SkillGateway...")
             skill_config = SkillConfig.from_global_config()
             self._gateway = await SkillGateway.from_config(config=skill_config)
-            self.tool_dispatcher = ToolDispatcher(
+            self.skill_dispatcher = SkillDispatcher(
                 skill_gateway=self._gateway,
             )
-            self._agent_profile = await AgentProfile.build_from_context(
+            mcp_cfg = g_mcp_config_manager.get_mcp_config()
+            await tools_registry.bootstrap(mcp_config=mcp_cfg)
+            self._agent_profile = await apm.build_profile(
                 skill_gateway=self._gateway,
                 config=g_config,
             )
@@ -220,7 +238,7 @@ class MementoSAgent:
             return 0
 
     def _get_or_create_bundle(self, session_id: str) -> SessionBundle:
-        """Get or create a SessionBundle (session_ctx + context_mgr + conv_mgr) with LRU eviction."""
+        """Get or create a SessionBundle with LRU eviction."""
         bundle = self._sessions.get(session_id)
         if bundle is not None:
             self._sessions.move_to_end(session_id)
@@ -228,29 +246,36 @@ class MementoSAgent:
             return bundle
 
         log_debug_marker(f"Creating new SessionBundle: {session_id}", level="debug")
-        session_ctx = SessionContext(
-            session_id=session_id,
-            environment=EnvironmentSnapshot.capture(),
-        )
+        session_goal = SessionGoal()
 
-        embedding_client = None
-        vector_storage = None
+        context_dir = g_config.paths.context_dir
+        if context_dir is None:
+            context_dir = Path.home() / "memento_s" / "context"
+        session_dir = context_dir / "sessions" / session_id
+        data_dir = context_dir
+
         ctx_config = self._agent_config.context
-        if ctx_config.embedding_enabled:
-            embedding_client, vector_storage = self._init_embedding()
 
-        context_mgr = ContextManager(
+        logger.info(
+            "[Agent] _get_or_create_bundle: sm_llm_update_interval={}, session_dir={}, context_dir={}",
+            ctx_config.sm_llm_update_interval,
+            session_dir, context_dir,
+        )
+        infra = InfraService(
             session_id=session_id,
-            config=ctx_config,
+            session_dir=session_dir,
+            data_dir=data_dir,
+            model=g_config.llm.current.model if g_config.llm.current else "",
+            context_config=InfraContextConfig.from_core_context_config(ctx_config),
+            sm_llm_update_interval=ctx_config.sm_llm_update_interval,
             skill_gateway=self._gateway,
-            history_loader=_load_history,
-            embedding_client=embedding_client,
-            vector_storage=vector_storage,
+            history_loader=partial(_load_history, session_id, 100),
+            context_dir=context_dir,
         )
 
         bundle = SessionBundle(
-            session_ctx=session_ctx,
-            context_mgr=context_mgr,
+            session_goal=session_goal,
+            infra=infra,
         )
         self._sessions[session_id] = bundle
         max_ctx = self._agent_config.max_session_contexts
@@ -270,44 +295,11 @@ class MementoSAgent:
                 session_id,
                 f"hash changed: {self._agent_profile_skill_hash} -> {current_hash}",
             )
-            self._agent_profile = await AgentProfile.build_from_context(
+            self._agent_profile = await apm.build_profile(
                 skill_gateway=self._gateway,
                 config=g_config,
             )
             self._agent_profile_skill_hash = current_hash
-
-    @staticmethod
-    def _init_embedding() -> tuple[EmbeddingClient | None, VectorStorage | None]:
-        """初始化 embedding 客户端和向量存储。"""
-        try:
-            if not SQLITE_VEC_AVAILABLE:
-                logger.warning("sqlite-vec not available, embedding disabled")
-                return None, None
-
-            client = EmbeddingClient.from_config()
-            if not client._config.base_url:
-                logger.info("Embedding service not configured, embedding disabled")
-                return None, None
-
-            if g_config.paths.data_dir is None:
-                logger.warning("data_dir not configured, embedding disabled")
-                return None, None
-
-            db_path = g_config.paths.data_dir / "memento.db"
-            storage = VectorStorage(
-                db_path=db_path,
-                table_name="conversation_embeddings",
-                id_column="conversation_id",
-            )
-            asyncio.ensure_future(storage.init())
-
-            # 设置 embedding 到 ChatManager
-            ChatManager.initialize(embedding_client=client, vector_storage=storage)
-            logger.info("Embedding enabled for conversation persistence and retrieval")
-            return client, storage
-        except Exception as e:
-            logger.warning("Failed to initialize embedding: {}", e)
-            return None, None
 
     # ── Main entry point ─────────────────────────────────────────────
 
@@ -316,44 +308,55 @@ class MementoSAgent:
         session_id: str,
         user_content: str,
         history: list[dict[str, Any]] | None = None,
+        conversation_id: str | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         await self._ensure_initialized()
         cfg = g_config
 
-        if self.tool_dispatcher is None:
+        if self.skill_dispatcher is None:
             raise RuntimeError("Agent initialisation failed: dispatcher unavailable")
 
-        self.tool_dispatcher.set_session_id(session_id)
+        # Clear any stale cancel flag from a previous run
+        self._clear_cancel(session_id)
 
-        # Set up skill execution step callback for real-time GUI updates
+        # Per-session lock to prevent concurrent reply_stream
+        if session_id not in self._reply_locks:
+            self._reply_locks[session_id] = asyncio.Lock()
+
+        # Create SessionContext inside core/ — callers outside core/ only see strings
+        context_dir = g_config.paths.context_dir
+        if context_dir is None:
+            context_dir = Path.home() / "memento_s" / "context"
+        ctx = SessionContext.create(session_id, base_dir=context_dir)
+        self.skill_dispatcher.set_context(ctx)
+
         if hasattr(self, "_on_skill_step_callback") and self._on_skill_step_callback:
-            self.tool_dispatcher.set_on_skill_step(self._on_skill_step_callback)
+            self.skill_dispatcher.set_on_skill_step(self._on_skill_step_callback)
 
         bundle = self._get_or_create_bundle(session_id)
-        self.context_manager = bundle.context_mgr
-        self.tool_dispatcher.set_on_skills_changed(
-            self.context_manager.invalidate_skills_cache
+        self.infra = bundle.infra
+
+        # Wire infra into tool_dispatcher for recall_context
+        self.skill_dispatcher._infra = self.infra
+
+        self.skill_dispatcher.set_on_skills_changed(
+            self.infra.context.session_memory.is_empty  # no-op, kept for compat
+        )
+
+        # Initialize SessionMemory (CC-style summary.md)
+        await self.infra.session_memory.setup()
+        logger.info(
+            "[Agent] session_memory initialized: type={}, empty={}",
+            type(self.infra.session_memory).__name__,
+            self.infra.session_memory.is_empty(),
         )
 
         if history is None:
-            history = await self.context_manager.load_history(
-                current_user_message=user_content
-            )
+            history = await self.infra.context.load_history()
 
-        session_ctx = bundle.session_ctx
-        session_ctx.update_goal(
-            user_content
-        )  # increments turn_count; sets goal on first turn only
+        session_goal = bundle.session_goal
+        session_goal.refine(user_content)
 
-        # Start new block + update runtime state on user input
-        self.context_manager.start_new_block(user_content)
-        rs = self.context_manager.runtime_state
-        rs.on_user_input(
-            user_content,
-            block_id=self.context_manager.active_block.block_id
-            if self.context_manager.active_block
-            else "",
-        )
         await self._refresh_profile_if_needed(session_id)
 
         run_id = new_run_id()
@@ -376,9 +379,8 @@ class MementoSAgent:
                 user_content,
                 history,
                 self.llm,
-                self.context_manager,
-                session_context=session_ctx,
-                config=self._agent_config,
+                self.infra.context,
+                session_goal,
             )
             logger.info(
                 "Intent: mode={}, task={}, shifted={}",
@@ -397,47 +399,28 @@ class MementoSAgent:
             # ════════════════════════════════════════════════════════════
             if intent.mode in (IntentMode.DIRECT, IntentMode.INTERRUPT):
                 log_agent_phase("DIRECT_REPLY", session_id, f"mode={intent.mode.value}")
-                if self.context_manager.bounded_prompt_enabled:
-                    messages = await self.context_manager.assemble_messages_bounded(
-                        current_message=user_content,
-                        media=None,
-                        matched_skills_context="",
-                        agent_profile=self._agent_profile,
-                        session_context=session_ctx,
-                        mode=intent.mode.value,
-                        intent_shifted=intent.intent_shifted,
-                        effective_context_window=self.llm.context_window,
-                    )
-                else:
-                    messages = await self.context_manager.assemble_messages(
-                        history=history,
-                        current_message=user_content,
-                        media=None,
-                        matched_skills_context="",
-                        agent_profile=self._agent_profile,
-                        session_context=session_ctx,
-                        mode=intent.mode.value,
-                        intent_shifted=intent.intent_shifted,
-                        effective_context_window=self.llm.context_window,
-                    )
-                total_tokens = self.context_manager.total_tokens
+                messages = await self.infra.context.load_and_assemble(
+                    current_message=user_content,
+                    history=history,
+                    agent_profile=self._agent_profile,
+                    mode=intent.mode.value,
+                    intent_shifted=intent.intent_shifted,
+                    effective_context_window=self.llm.context_window,
+                )
+                total_tokens = self.infra.context.total_tokens
                 yield emitter.step_started(step=1, name="direct_reply")
+                result_info: dict[str, Any] = {}
                 async for event in stream_and_finalize(
                     messages=messages,
                     llm=self.llm,
                     tools=None,
                     emitter=emitter,
                     step=1,
-                    session_ctx=session_ctx,
                     context_tokens=total_tokens,
+                    session_ctx=self.infra.context,
+                    result_info=result_info,
                 ):
                     yield event
-
-                # Persist runtime state for DIRECT/INTERRUPT
-                rs.on_run_finished()
-                self.context_manager.sync_and_save_runtime_state(
-                    session_ctx=session_ctx,
-                )
                 return
 
             # ════════════════════════════════════════════════════════════
@@ -445,40 +428,24 @@ class MementoSAgent:
             # ════════════════════════════════════════════════════════════
             if intent.mode == IntentMode.CONFIRM:
                 log_agent_phase(
-                    "CONFIRM_REPLY", session_id, f"ambiguity={intent.ambiguity[:60]}"
+                    "CONFIRM_REPLY", session_id,
+                    f"ambiguity={(intent.ambiguity or '')[:60]}"
                 )
                 question = (
                     intent.clarification_question
                     or intent.ambiguity
                     or "Could you please clarify?"
                 )
-                if self.context_manager.bounded_prompt_enabled:
-                    confirm_messages = (
-                        await self.context_manager.assemble_messages_bounded(
-                            current_message=user_content,
-                            media=None,
-                            matched_skills_context="",
-                            agent_profile=self._agent_profile,
-                            session_context=session_ctx,
-                            mode="direct",
-                            intent_shifted=False,
-                            effective_context_window=self.llm.context_window,
-                        )
-                    )
-                else:
-                    confirm_messages = await self.context_manager.assemble_messages(
-                        history=history,
-                        current_message=user_content,
-                        media=None,
-                        matched_skills_context="",
-                        agent_profile=self._agent_profile,
-                        session_context=session_ctx,
-                        mode="direct",
-                        intent_shifted=False,
-                        effective_context_window=self.llm.context_window,
-                    )
+                confirm_messages = await self.infra.context.load_and_assemble(
+                    current_message=user_content,
+                    history=history,
+                    agent_profile=self._agent_profile,
+                    mode="direct",
+                    intent_shifted=False,
+                    effective_context_window=self.llm.context_window,
+                )
                 confirm_messages.append({"role": "assistant", "content": question})
-                total_tokens = self.context_manager.total_tokens
+                total_tokens = self.infra.context.total_tokens
                 yield emitter.step_started(step=1, name="confirm_question")
                 msg_id = emitter.new_message_id()
                 yield emitter.text_message_start(message_id=msg_id, role="assistant")
@@ -495,7 +462,7 @@ class MementoSAgent:
             # ════════════════════════════════════════════════════════════
             # Route: AGENTIC → plan → execute → reflect
             # ════════════════════════════════════════════════════════════
-            session_ctx.session_goal = intent.task
+            session_goal.text = intent.task
 
             log_agent_phase("PLAN_START", session_id, f"goal={intent.task[:60]}")
 
@@ -508,11 +475,9 @@ class MementoSAgent:
                 )
                 for m in manifests
             ]
-            env = session_ctx.environment
             plan_ctx = PlanContext(
-                environment_summary=f"Project: {env.project_type}, OS: {env.os_info}",
                 available_skills=skill_briefs,
-                history_summary=self.context_manager.build_history_summary(
+                history_summary=self.infra.context.build_history_summary(
                     history,
                     max_rounds=self._agent_config.history_summary_max_rounds,
                     max_tokens=self._agent_config.history_summary_max_tokens,
@@ -526,38 +491,28 @@ class MementoSAgent:
             task_plan = validate_plan(task_plan, {m.name for m in manifests})
             logger.info("Plan generated: {} steps", len(task_plan.steps))
 
-            # Update runtime state: plan generated
-            rs.on_plan_generated(step_count=len(task_plan.steps))
-
-            # Record plan event in block
-            plan_text = "; ".join(s.action for s in task_plan.steps)
-            self.context_manager.append_block_event(make_event("plan", text=plan_text))
-
             yield emitter.plan_generated(**task_plan.to_event_payload())
 
-            if self.context_manager.bounded_prompt_enabled:
-                messages = await self.context_manager.assemble_messages_bounded(
-                    current_message=user_content,
-                    media=None,
-                    matched_skills_context="",
-                    agent_profile=self._agent_profile,
-                    session_context=session_ctx,
-                    mode=intent.mode.value,
-                    intent_shifted=intent.intent_shifted,
-                    effective_context_window=self.llm.context_window,
-                )
-            else:
-                messages = await self.context_manager.assemble_messages(
-                    history=history,
-                    current_message=user_content,
-                    media=None,
-                    matched_skills_context="",
-                    agent_profile=self._agent_profile,
-                    session_context=session_ctx,
-                    mode=intent.mode.value,
-                    intent_shifted=intent.intent_shifted,
-                    effective_context_window=self.llm.context_window,
-                )
+            # [ANALYSIS-LOG] Log the full validated plan as structured JSON
+            import json as _json
+            plan_dump = {
+                "goal": task_plan.goal,
+                "steps": [s.model_dump() for s in task_plan.steps],
+            }
+            logger.info(
+                "[ANALYSIS-LOG] === PLAN_VALIDATED: {} step(s) ===\n{}",
+                len(task_plan.steps),
+                _json.dumps(plan_dump, indent=2, ensure_ascii=False),
+            )
+
+            messages = await self.infra.context.load_and_assemble(
+                current_message=user_content,
+                history=history,
+                agent_profile=self._agent_profile,
+                mode=intent.mode.value,
+                intent_shifted=intent.intent_shifted,
+                effective_context_window=self.llm.context_window,
+            )
 
             local_skill_names = []
             if self._gateway:
@@ -577,47 +532,69 @@ class MementoSAgent:
                     local_skill_names,
                 ),
             )
-            state.sync_plan_state(session_ctx)
 
-            total_tokens = self.context_manager.total_tokens
+            self.skill_dispatcher.set_step_summary_source(
+                lambda: state.last_step_summary
+            )
+
+            total_tokens = self.infra.context.total_tokens
             tool_sink = ToolTranscriptSink(
-                persister=partial(_persist_tool_to_db, session_id),
+                persister=partial(_persist_tool_to_db, session_id, conversation_id=conversation_id),
             )
             async for event in run_plan_execution(
                 state=state,
                 llm=self.llm,
-                tool_dispatcher=self.tool_dispatcher,
-                tool_schemas=list(AGENT_TOOL_SCHEMAS),
-                session_ctx=session_ctx,
+                tool_dispatcher=self.skill_dispatcher,
+                tool_schemas=self.skill_dispatcher.get_skill_tool_schemas(),
+                session_goal_text=session_goal.text,
                 emitter=emitter,
                 user_content=user_content,
                 max_iter=max_iter,
-                ctx=self.context_manager,
+                ctx=self.infra.context,
                 context_tokens=total_tokens,
             ):
                 await tool_sink.handle(event)
                 yield event
 
-            # Persist runtime state after AGENTIC execution
-            rs.on_run_finished()
-            self.context_manager.sync_and_save_runtime_state(
-                agent_run_state=state,
-                session_ctx=session_ctx,
-            )
+            # L1 save + 累积到 staging
+            sm = self.infra.session_memory
+            sm.save()
+            if not sm.is_empty():
+                await self.infra.context_memory.accumulate_session(sm.get_content())
+
+                # 检查是否应触发自动整合
+                engine = getattr(self.infra, "memory_engine", None)
+                if engine is not None and engine.check_should_consolidate():
+                    asyncio.create_task(engine.quick_run())
+
+            # 触发 USER.md / SOUL.md 进化（完全异步，不阻塞会话结束流程）
+            # 与 session memory 无关，conversation history 由 ChatManager 提供
+            try:
+                asyncio.create_task(self._trigger_evolution(session_id))
+            except RuntimeError:
+                pass
 
         except Exception as e:
             log_agent_phase(
                 "RUN_ERROR",
                 session_id,
-                f"error={type(e).__name__}: {str(e)[:100]}",
+                f"error={type(e).__name__}: {log_preview_long(str(e))}",
             )
             logger.exception("Agent run error")
             yield emitter.run_error(message=str(e))
             ctx_tokens = None
-            if self.context_manager and hasattr(self.context_manager, "total_tokens"):
-                ctx_tokens = self.context_manager.total_tokens
+            if self.infra and hasattr(self.infra.context, "total_tokens"):
+                ctx_tokens = self.infra.context.total_tokens
             yield emitter.run_finished(
                 output_text=f"Error: {e}",
                 reason=AgentFinishReason.ERROR,
                 context_tokens=ctx_tokens,
             )
+
+    async def _trigger_evolution(self, session_id: str) -> None:
+        """会话结束触发 USER/SOUL 进化。evolver 内部已做 task 调度，此处仅转发。"""
+        try:
+            from core.agent_profile import apm
+            apm.on_session_end(session_id)
+        except Exception:
+            pass

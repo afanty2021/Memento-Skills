@@ -1,7 +1,7 @@
 """Test SkillGateway.discover() method with different strategies."""
 
 import asyncio
-from core.skill.config import SkillConfig
+from shared.schema import SkillConfig
 from core.skill.gateway import SkillGateway
 from core.skill.schema import DiscoverStrategy
 from core.skill.initializer import SkillInitializer

@@ -8,11 +8,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from core.context.schemas import ContextConfig
+from core.context.config import ContextManagerConfig
 
 
 @dataclass
-class AgentConfig:
+class AgentRuntimeConfig:
     """Agent runtime parameters — threaded through to all phase functions."""
 
     # Execution control (per plan step)
@@ -32,8 +32,11 @@ class AgentConfig:
     # Session cache
     max_session_contexts: int = 100
 
+    # Execution limits (from middleware config)
+    max_iterations: int = 100
+
     # Context module config
-    context: ContextConfig = field(default_factory=ContextConfig)
+    context: ContextManagerConfig = field(default_factory=ContextManagerConfig)
 
     def __post_init__(self) -> None:
         if self.max_react_per_step < 1:

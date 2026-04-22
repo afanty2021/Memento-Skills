@@ -4,11 +4,11 @@ import json
 
 import pytest
 
-from core.memento_s.tool_dispatcher import ToolDispatcher
+from core.memento_s.skill_dispatch import SkillDispatcher
 
 
 @pytest.mark.asyncio
-async def test_skill_list_basic_real_gateway(real_dispatcher: ToolDispatcher):
+async def test_skill_list_basic_real_gateway(real_dispatcher: SkillDispatcher):
     raw = await real_dispatcher.execute("skill_list", {"verbose": False})
     payload = json.loads(raw)
 
@@ -23,7 +23,7 @@ async def test_skill_list_basic_real_gateway(real_dispatcher: ToolDispatcher):
 
 
 @pytest.mark.asyncio
-async def test_skill_list_verbose_real_gateway(real_dispatcher: ToolDispatcher):
+async def test_skill_list_verbose_real_gateway(real_dispatcher: SkillDispatcher):
     raw = await real_dispatcher.execute("skill_list", {"verbose": True})
     payload = json.loads(raw)
 

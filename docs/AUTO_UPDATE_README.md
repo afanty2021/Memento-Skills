@@ -62,32 +62,26 @@ ota:
 
 ## 文件说明
 
-### gui/modules/auto_update_manager.py
-核心更新管理器，包含：
-- `AutoUpdateManager` - 主管理类
+### electron/electron/updater.ts
+Electron 内置自动更新器，基于 `electron-updater`，包含：
+- `AutoUpdater` - 主更新管理
 - `UpdateStatus` - 更新状态枚举
-- `UpdateInfo` - 更新信息数据类
+- `UpdateInfo` - 更新信息
 - `DownloadProgress` - 下载进度追踪
-- `UpdateCache` - 缓存元数据管理
 
 主要方法：
-- `start_auto_check()` - 启动自动检查
-- `check_for_update()` - 手动检查更新
-- `download_update()` - 下载更新
-- `pause_download()` - 暂停下载
-- `resume_download()` - 恢复下载
-- `cancel_download()` - 取消下载
-- `install_update()` - 安装更新
+- `checkForUpdates()` - 检查更新
+- `downloadUpdate()` - 下载更新
+- `quitAndInstall()` - 安装更新并重启
 
-### gui/modules/update_notifier.py
-更新通知 UI，包含：
-- `UpdateNotifier` - 通知管理器
+### electron/src/composables/useUpdater.ts
+Vue 3 更新通知 UI，包含：
+- `useUpdater()` - 更新通知组合式函数
 
 主要功能：
 - 显示下载进度对话框
 - 下载完成通知卡片
 - 安装确认对话框
-- 安装进度显示
 
 ### middleware/config/config_models.py
 扩展的 OTA 配置模型：
@@ -159,62 +153,27 @@ ota:
 
 ## 测试命令
 
-```python
-# 手动触发更新检查
-from gui.modules.auto_update_manager import AutoUpdateManager
-manager = AutoUpdateManager()
-await manager.check_for_update()
+```typescript
+// Electron 中手动触发更新检查
+import { autoUpdater } from 'electron-updater';
+autoUpdater.checkForUpdates();
+```
 
-# 查看缓存状态
-print(manager.has_cached_update)
-print(manager.current_update)
-
-# 清除缓存
-manager.clear_cache()
+```bash
+# 在 Electron 源码目录中运行
+cd electron && npm run build:mac    # macOS
+cd electron && npm run build:win    # Windows
+cd electron && npm run build:linux  # Linux
 ```
 
 ## 测试与演示
 
-项目包含完整的测试演示工具：
+Electron 内置 `electron-updater` 的测试通过实际构建流程验证：
 
-### 1. 快速演示（无需服务器）
 ```bash
-# 查看完整的更新流程演示
-python tests/auto_update/demo.py
+# 1. 构建应用
+cd electron && npm ci && npm run build:mac
 
-# 快速状态演示
-python tests/auto_update/demo.py --quick
-
-# 分步骤演示
-python tests/auto_update/demo.py --step check
-python tests/auto_update/demo.py --step download
-python tests/auto_update/demo.py --step install
+# 2. electron-updater 会自动检测更新（需配置 OTA 服务器 URL）
+# 3. 查看 electron-updater 日志验证更新流程
 ```
-
-### 2. Mock OTA 服务器
-```bash
-# 启动测试服务器
-python tests/auto_update/mock_ota_server.py
-
-# 访问 http://localhost:8888 查看 API 文档
-```
-
-### 3. 集成测试
-```bash
-# 测试更新检查
-python tests/auto_update/test_auto_update.py check
-
-# 测试下载
-python tests/auto_update/test_auto_update.py download
-
-# 测试完整流程
-python tests/auto_update/test_auto_update.py full
-
-# 测试缓存管理
-python tests/auto_update/test_auto_update.py cache
-
-# 交互式演示
-python tests/auto_update/test_auto_update.py demo
-```
-
-详细说明请查看 `tests/auto_update/README.md`

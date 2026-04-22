@@ -1,28 +1,15 @@
-"""retrieval — 技能检索（本地向量 + 远程召回 + 多路合并）"""
+"""retrieval — 技能检索（本地召回 + 远程召回 + 多路合并）"""
 
 from .base import BaseRecall
-from .local_file_recall import LocalFileRecall
+from .local_recall import LocalRecall
 from .multi_recall import MultiRecall
 from .remote_recall import RemoteRecall
-from .schema import RecallCandidate
+from shared.schema import SkillSearchResult
 
-# LocalDbRecall 是可选的（依赖 sqlite-vec）
-try:
-    from .local_db_recall import LocalDbRecall
-
-    __all__ = [
-        "BaseRecall",
-        "LocalDbRecall",
-        "LocalFileRecall",
-        "MultiRecall",
-        "RecallCandidate",
-        "RemoteRecall",
-    ]
-except ImportError:
-    __all__ = [
-        "BaseRecall",
-        "LocalFileRecall",
-        "MultiRecall",
-        "RecallCandidate",
-        "RemoteRecall",
-    ]
+__all__ = [
+    "BaseRecall",
+    "LocalRecall",
+    "MultiRecall",
+    "RemoteRecall",
+    "SkillSearchResult",
+]

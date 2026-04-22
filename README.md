@@ -3,7 +3,7 @@
 <h3 align="center"><b>Deploy an agent. Let it learn, rewrite, and evolve its own skills.</b></h3>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Version-0.2.0-blue?style=for-the-badge" alt="Version 0.2.0">
+  <img src="https://img.shields.io/badge/Version-0.3.0-blue?style=for-the-badge" alt="Version 0.3.0">
   <img src="https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white" alt="Python 3.12+">
   <img src="https://img.shields.io/badge/Skills-10%20built--in-0f766e" alt="10 built-in skills">
   <img src="https://img.shields.io/badge/Framework-Fully%20Self--Developed-b91c1c" alt="Fully self-developed framework">
@@ -21,7 +21,7 @@
 </p>
 
 <p align="center">
-  <a href="#-whats-new-in-v020">What's New</a> ·
+  <a href="#-whats-new-in-v030">What's New</a> ·
   <a href="#-learning-results">Learning Results</a> ·
   <a href="#-one-click-gui-install">Install</a> ·
   <a href="#-quick-start-developer">Quick Start</a> ·
@@ -53,6 +53,91 @@
 <p align="center"><sub>The architecture of the Self-Evolving Agent based on Read-Write Reflective Learning. When a user submits a task, the agent uses a skill router to either retrieve an executable skill from its skill library or generate a new one from scratch, which it then executes to solve the problem. Following execution, the system reflects on the outcome to write back to the library, either by increasing the skill's utility score if the action was successful, or by optimising its underlying skill folders if it failed. This continuous read-write loop enables the agent to progressively expand and refine its capabilities through continual learning, entirely without updating the underlying LLM parameters.</sub></p>
 </td></tr>
 </table>
+
+---
+
+## What's New in v0.3.0
+
+> **v0.3.0** focuses on cleaner separation of concerns. The runtime is now organised into a dedicated infrastructure layer, a unified tool registry, and a long-lived agent profile system, so that core agent logic, infrastructure, and tools can evolve independently.
+
+### Infrastructure Layer (`infra/`)
+
+A new top-level `infra/` package isolates infrastructure concerns from `core/` so that agent logic and platform code can evolve independently.
+
+| Module | Description |
+| --- | --- |
+| `infra/memory/` | Long-term and session memory implementations, plus context-block builders. |
+| `infra/context/` | Pluggable context providers and shared utilities used by the runtime. |
+| `infra/compact/` | Context compaction pipeline (strategies, storage, models, utilities) for long-conversation summarisation. |
+| `infra/service.py` | `InfraService` entry that wires the above into the agent runtime. |
+| `infra/shared/` | Shared compact / extract helpers reused across providers. |
+
+### Unified Tool Registry (`tools/`)
+
+Tooling has been promoted to a top-level `tools/` package with a single `ToolRegistry`. The previous `builtin/tools/` layer has been retired in favour of this unified surface.
+
+| Module | Description |
+| --- | --- |
+| `tools/atomics/` | Atomic tools (bash, file ops, grep, glob, list, web, python_repl, js_repl, MCP wrappers). |
+| `tools/mcp/` | MCP client integration for loading external MCP servers as tools. |
+| `tools/registry.py` | Single registration / discovery surface (`get_registry`) consumed by the agent and skill executor. |
+
+### Agent Profile System
+
+`core/agent_profile/` introduces persistent profiles that capture an agent's long-term identity, while a matching `daemon/agent_profile/` package evolves those profiles in the background.
+
+| Module | Description |
+| --- | --- |
+| `core/agent_profile/manager.py` | Read / write API for soul and user profiles. |
+| `core/agent_profile/soul_manager.py` | Maintains the agent's long-term identity, traits, and policies. |
+| `core/agent_profile/user_manager.py` | Tracks per-user preferences and history. |
+| `daemon/agent_profile/orchestrator.py` | Background orchestrator that triggers soul / user evolution. |
+| `daemon/agent_profile/soul_evolver.py` / `user_evolver.py` | Periodically refines profiles from recent conversations and outcomes. |
+
+### Dream Daemon
+
+A new `daemon/dream/` package runs background consolidation between sessions, similar to how reflection updates the skill library.
+
+| Module | Description |
+| --- | --- |
+| `daemon/dream/consolidator.py` | Consolidates recent experiences into long-term memory and skill candidates. |
+| `daemon/dream/loop.py` | Long-running loop that schedules consolidation passes. |
+
+### Shared Layer Expansion (`shared/`)
+
+The `shared/` package has grown beyond chat utilities into a broader foundation for cross-cutting helpers.
+
+| Module | Description |
+| --- | --- |
+| `shared/fs/` | Filesystem helpers shared by core, infra, and tools. |
+| `shared/hooks/` | Lifecycle hooks for runtime extension points. |
+| `shared/schema/` | Reusable schema definitions. |
+| `shared/security/` | Path / argument security primitives. |
+| `shared/tools/` | Common tool utilities and dispatcher helpers. |
+
+### Runtime & Developer Experience
+
+| Addition | Description |
+| --- | --- |
+| `utils/runtime_requirements/` | Runtime dependency checker and auto-installer that resolves missing packages on first use. |
+| `utils/runtime_mode.py` | Runtime mode detection (CLI vs GUI vs daemon). |
+| `utils/log_config.py` | Centralised logging configuration. |
+| `utils/strings.py` | Shared string helpers used across the codebase. |
+| `core/skill/downloader/` | Dedicated downloader pipeline split out from the skill market. |
+| `docs/ARCHITECTURE.md`, `docs/API_SPEC.md` | Up-to-date architecture and API references. |
+| `docs/dependency_auto_install.md`, `docs/README_DEPENDENCY.md` | Runtime dependency model and auto-install behaviour. |
+| `docs/database_optimization.md`, `docs/uni_response_design.md` | New design notes for storage and unified response handling. |
+
+### Refactors and Removals
+
+The new layout supersedes several v0.2.0 modules. The v0.2.0 `tool_bridge/` layer (`runner`, `bridge`, `context`, `args_processor`, `result_processor`) is replaced by the unified `tools/` registry. `builtin/tools/` (bash, file_ops, grep, python_repl, web) has been moved to `tools/atomics/`. The monolithic `core/skill/execution/executor.py` and `core/context/manager.py`, together with `core/context/{block,scratchpad,runtime_state,memory}.py`, have been split into `tools/`, `infra/context/`, and `infra/memory/`. IM startup no longer goes through `middleware/im/gateway_starter.py` and `middleware/im/gateway/agent_worker.py`; both are removed and replaced by a single `EndpointService` (`server/endpoint/im/`) that manages all IM channels and the agent worker. `bootstrap.py` and `middleware/llm/llm_client.py` have been reworked to align with this new wiring.
+
+### Compatibility Notes
+
+- Modules previously imported from `builtin.tools.*` are now under `tools.*` (for example, `tools.atomics`, `tools.mcp`, `tools.registry`).
+- Modules previously under `core/shared/*` (compact, memory, context wiring) now live under `infra/*`. Update any direct imports accordingly.
+- `core/manager/` has been removed; conversation and session management now lives in `shared/chat/`.
+- IM channels are now started via `EndpointService.start_channel(...)` (`server/endpoint/im/`); direct use of `gateway_starter` / `agent_worker` no longer applies.
 
 ---
 
@@ -297,7 +382,7 @@ memento-gui       # Launch the desktop GUI with chat interface
 <details>
 <summary><b>Configuration system (v2)</b></summary>
 
-Memento-Skills v0.2.0 uses a three-layer configuration architecture:
+Memento-Skills uses a three-layer configuration architecture (introduced in v0.2.0):
 
 - **System Config** (`system_config.json`) — read-only defaults shipped with the codebase.
 - **User Config** (`~/memento_s/config.json`) — persistent user customisation, read-write.
@@ -387,31 +472,40 @@ The built-in skills are the starting point, not the end state. The goal is not t
 
 ```text
 Memento-Skills/
-├── core/                  # Core framework
+├── core/                  # Core agent framework
 │   ├── memento_s/         # Agent orchestrator (4-stage ReAct + Finalize)
 │   │   ├── phases/        # Intent, Planning, Execution/, Reflection, Finalize
-│   │   └── tools.py       # Tool routing and dispatch
+│   │   └── skill_dispatch/ # Skill dispatch and tool routing
 │   ├── skill/             # Skill framework
-│   │   ├── builder/       # Skill creation (new)
-│   │   ├── loader/        # Skill discovery and loading (new)
+│   │   ├── loader/        # Skill discovery and loading
 │   │   ├── retrieval/     # BM25 + vector hybrid retrieval
-│   │   ├── execution/     # Sandbox execution + tool_bridge + policies
-│   │   ├── store/         # DB / file / vector storage backends
-│   │   ├── embedding/     # Semantic embeddings
-│   │   ├── market.py      # Skill Market (new)
+│   │   ├── execution/     # Sandbox execution + policies
+│   │   ├── store/         # Skill persistence backends
+│   │   ├── downloader/    # Skill download pipeline (new in v0.3.0)
+│   │   ├── market.py      # Skill Market
 │   │   └── gateway.py     # Unified skill gateway
+│   ├── agent_profile/     # Agent profile system (new in v0.3.0)
 │   ├── context/           # Bounded Context management
-│   ├── protocol/          # Communication protocols (new)
-│   ├── shared/            # Core shared components (new)
+│   ├── protocol/          # Communication protocols
 │   └── prompts/           # Prompt templates
+├── infra/                 # Infrastructure layer (new in v0.3.0)
+│   ├── memory/            # Long-term and session memory
+│   ├── context/           # Context providers
+│   ├── compact/           # Context compaction pipeline
+│   ├── shared/            # Compact / extract helpers
+│   └── service.py         # InfraService entry
+├── tools/                 # Unified tool registry (new in v0.3.0)
+│   ├── atomics/           # Atomic tools (bash, file, grep, web, repl, mcp)
+│   ├── mcp/               # MCP client integration
+│   └── registry.py        # ToolRegistry
 ├── middleware/             # Middleware layer
 │   ├── config/            # Config v2 (three-layer isolation)
 │   ├── llm/               # LLM client (litellm multi-provider)
 │   ├── storage/           # SQLite + SQLAlchemy + vector storage
-│   ├── im/                # IM platform middleware (new)
-│   ├── sandbox/           # uv sandbox (refactored)
+│   ├── im/                # IM platform middleware
+│   ├── sandbox/           # uv sandbox
 │   └── utils/             # Environment, path security
-├── im/                    # IM platform integrations (new)
+├── im/                    # IM platform integrations
 │   ├── gateway/           # Gateway mode
 │   ├── feishu/            # Feishu
 │   ├── dingtalk/          # DingTalk
@@ -419,16 +513,19 @@ Memento-Skills/
 ├── gui/                   # Flet desktop GUI
 ├── cli/                   # Typer CLI
 ├── builtin/skills/        # Built-in skills (10)
-├── builtin/tools/         # Built-in tools
-├── shared/                # Shared components
-├── utils/                 # Shared helpers
-├── daemon/                # Background service
-├── tests/                 # Test suite (new)
-├── scripts/               # Build and deployment scripts (new)
-├── docs/                  # Documentation (new)
-├── 3rd/                   # Third-party SDKs (new)
-├── bootstrap.py           # Application initialisation (new)
-├── version.py             # Version metadata (new)
+├── shared/                # Shared layer (expanded in v0.3.0)
+│   ├── chat/              # Session and conversation
+│   ├── fs/, hooks/, schema/, security/, tools/  # Cross-cutting helpers
+├── utils/                 # Shared helpers (runtime_requirements/ new in v0.3.0)
+├── daemon/                # Background services
+│   ├── agent_profile/     # Soul / user evolver (new in v0.3.0)
+│   └── dream/             # Dream consolidation loop (new in v0.3.0)
+├── tests/                 # Test suite
+├── scripts/               # Build and deployment scripts
+├── docs/                  # Documentation
+├── 3rd/                   # Third-party SDKs
+├── bootstrap.py           # Application initialisation
+├── version.py             # Version metadata
 ├── Figures/               # README figures
 └── pyproject.toml         # Project configuration
 ```
@@ -500,6 +597,8 @@ If you find Memento-Skills useful in your research, please cite:
 Memento-Skills 的核心不是"怎么让 assistant 跑起来"，而是"怎么让 agent 学会"。它把能力组织成 `skills`，并围绕 `Read -> Execute -> Reflect -> Write` 的闭环，让 agent 在真实任务中发现失败、定位问题 skill、修改或重建 skill，再把结果写回 skill library。
 
 和 OpenClaw 相比，两者都具备 skills、工具调用、本地执行、持久化记忆和系统化部署能力，但关注点不同。OpenClaw 更偏向让 assistant 稳定接入真实世界；Memento-Skills 更偏向让 agent 从真实部署经验中持续学习和自我演化。
+
+**v0.3.0 主要更新：** 新增独立的 `infra/` 基础设施层（memory / context / compact / service），将记忆、上下文、压缩等基础能力从 `core/` 中拆出，便于独立演进；新增统一的 `tools/` 工具注册中心（atomics、MCP、registry），取代原有 `builtin/tools/`；引入 Agent Profile 系统（`core/agent_profile/` + `daemon/agent_profile/`），通过后台 evolver 持续维护 agent 的长期身份与用户画像；新增 `daemon/dream/` 后台巩固循环，在会话间进行经验整理；扩展 `shared/` 共享层（fs / hooks / schema / security / tools）；新增 `utils/runtime_requirements/` 运行时依赖自动检测安装。
 
 **v0.2.0 主要更新：** 核心架构采用 Bounded Context 重构，配置系统升级为三层隔离架构（System/User/Runtime），新增 Skill Market 支持云端技能市场，新增多平台 IM Gateway（飞书、钉钉、企业微信、微信），执行引擎拆分为细粒度子模块并增加 Tool Bridge、执行策略、错误恢复和循环检测机制，GUI 新增 Workspace 浏览器和会话管理，新增完整测试套件和构建脚本。
 

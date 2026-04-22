@@ -65,14 +65,49 @@ class FeishuPlatform:
 
     优先从 ~/memento_s/config.json 的 im.feishu 节读取配置，
     缺失时回退到同名环境变量（FEISHU_APP_ID / FEISHU_APP_SECRET / FEISHU_WEBHOOK_URL）。
+
+    也支持直接传入凭证参数（优先使用传入的值）。
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        app_id: str | None = None,
+        app_secret: str | None = None,
+        webhook_url: str | None = None,
+        encrypt_key: str | None = None,
+        verification_token: str | None = None,
+    ) -> None:
         cfg = _load_feishu_config()
-        self._app_id = cfg.get("app_id") or os.environ.get("FEISHU_APP_ID", "")
-        self._app_secret = cfg.get("app_secret") or os.environ.get("FEISHU_APP_SECRET", "")
-        self._webhook_url = cfg.get("webhook_url") or os.environ.get("FEISHU_WEBHOOK_URL", "")
-        self._base_url = (cfg.get("base_url") or os.environ.get("FEISHU_BASE_URL", DEFAULT_BASE_URL)).rstrip("/")
+
+        # 优先使用传入的参数，其次从配置文件读取，最后回退到环境变量
+        self._app_id = (
+            app_id
+            if app_id is not None
+            else cfg.get("app_id") or os.environ.get("FEISHU_APP_ID", "")
+        )
+        self._app_secret = (
+            app_secret
+            if app_secret is not None
+            else cfg.get("app_secret") or os.environ.get("FEISHU_APP_SECRET", "")
+        )
+        self._webhook_url = (
+            webhook_url
+            if webhook_url is not None
+            else cfg.get("webhook_url") or os.environ.get("FEISHU_WEBHOOK_URL", "")
+        )
+        self._encrypt_key = (
+            encrypt_key
+            if encrypt_key is not None
+            else cfg.get("encrypt_key") or os.environ.get("FEISHU_ENCRYPT_KEY", "")
+        )
+        self._verification_token = (
+            verification_token
+            if verification_token is not None
+            else cfg.get("verification_token") or os.environ.get("FEISHU_VERIFICATION_TOKEN", "")
+        )
+        self._base_url = (
+            cfg.get("base_url") or os.environ.get("FEISHU_BASE_URL", DEFAULT_BASE_URL)
+        ).rstrip("/")
 
         self._use_webhook_only = bool(self._webhook_url and not (self._app_id and self._app_secret))
 

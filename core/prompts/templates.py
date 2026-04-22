@@ -33,6 +33,10 @@ ENVIRONMENT_SECTION: Final[str] = """\
 [Environment]
 - Available skills are listed in the **Available Skills** section below.
 - Only use skills listed there. To create new skills, use `create_skill`.
+- **Output paths**: All skill outputs must be written inside the session directory
+  (e.g. `output.pdf`, `workspace/report.pdf`). Do NOT use absolute paths like
+  `/Users/.../output.pdf`. The execution engine will automatically rebase any path
+  under the workspace root onto the correct session directory.
 [/Environment]"""
 
 EXECUTION_CONSTRAINTS_SECTION: Final[str] = """\
@@ -224,7 +228,11 @@ pdf extraction then translation, create separate steps.
 - Pre-fill `skill_request` with the concrete instruction for that skill.
 - Set `input_from` to reference prior steps whose output this step consumes.
 - Keep to 1–7 steps. Be concise and actionable.
-- Do NOT include absolute filesystem paths in plans.
+- **No absolute paths in `skill_request`**: The execution engine will automatically
+  rebase any session workspace path to the session directory. Use only the
+  filename or a simple relative path like `report.pdf` in `skill_request` —
+  do NOT write absolute paths. The skill agent does not have access to paths
+  outside the session directory anyway.
 
 Return ONLY valid JSON."""
 
@@ -313,6 +321,7 @@ IMPORTANT: The steps above marked [DONE] have ALREADY been executed successfully
 Do NOT re-execute them. Continue from the current step."""
 
 STEP_GOAL_HINT: Final[str] = (
+    "{skill_catalog}"
     "[Current Step] Step {step_id}: {action}\n"
     "Expected output: {expected_output}\n"
     "Suggested skill: {skill_name}\n"

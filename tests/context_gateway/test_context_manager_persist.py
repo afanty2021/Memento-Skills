@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from core.context.manager import ContextManager
+from core.context import ContextManager
 
 
 def test_persist_tool_result_returns_inline(context_manager: ContextManager):

@@ -10,19 +10,17 @@ from pathlib import Path
 
 import pytest
 
-from builtin.tools.registry import configure as configure_builtin_tools
 from core.memento_s.policies import PolicyManager
-from core.memento_s.tool_dispatcher import ToolDispatcher
+from core.memento_s.skill_dispatch import SkillDispatcher
 
 
 @pytest.fixture
-def real_dispatcher() -> ToolDispatcher:
+def real_dispatcher() -> SkillDispatcher:
     """Fixture using the new init_skill_system API.
 
     TODO: Update to use init_skill_system() which returns the gateway
     """
     workspace = Path(__file__).resolve().parents[2]
-    configure_builtin_tools(workspace)
 
     # TODO: Use new API
     # from core.skill import init_skill_system

@@ -61,10 +61,15 @@ class DingTalkAdapter(BaseChannelAdapter):
     def __init__(self, **kwargs):
         """初始化钉钉适配器。
 
-        注意：凭证参数在 kwargs 中传入，但本适配器从配置文件读取凭证，
-        因此忽略 kwargs 中的凭证参数。
+        凭证参数在 kwargs 中传入，优先使用传入的凭证，其次从配置文件读取。
         """
         super().__init__()
+
+        # 保存传入的凭证
+        self._app_key = kwargs.get("app_key") or kwargs.get("app_id")  # 支持 app_id 作为别名
+        self._app_secret = kwargs.get("app_secret")
+        self._webhook_url = kwargs.get("webhook_url")
+        self._webhook_secret = kwargs.get("webhook_secret")
 
         # im_platform 组件
         self._platform: Any = None  # DingTalkPlatform
@@ -88,9 +93,13 @@ class DingTalkAdapter(BaseChannelAdapter):
         mode: ConnectionMode,
     ) -> None:
         """初始化钉钉适配器。"""
-        # 导入 im_platform 组件
-        # 创建 Platform 实例（从配置文件读取凭证）
-        self._platform = DingTalkPlatform()
+        # 创建 Platform 实例，传入凭证（优先使用，否则从配置文件读取）
+        self._platform = DingTalkPlatform(
+            app_key=self._app_key,
+            app_secret=self._app_secret,
+            webhook_url=self._webhook_url,
+            webhook_secret=self._webhook_secret,
+        )
 
         logger.info(
             "DingTalk adapter initialized: mode=%s",

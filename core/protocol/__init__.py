@@ -15,7 +15,7 @@ from .pipeline import (
     ToolTranscriptSink,
 )
 from .run_emitter import RunEmitter
-from .types import AgentFinishReason, PhaseSignalType, PlanStepStatus, RunStatus, StepStatus
+from .types import AgentFinishReason, IntentMode, PhaseSignalType, PlanStepStatus, RunStatus, StepStatus
 
 __all__ = [
     "AGUIEventPipeline",

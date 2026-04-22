@@ -63,8 +63,26 @@ def run_migrations_offline() -> None:
 def run_migrations_online() -> None:
     """Online mode with asyncio support."""
     import asyncio
+    import threading
 
-    asyncio.run(run_async_migrations())
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # No running loop — safe to use asyncio.run()
+        asyncio.run(run_async_migrations())
+    else:
+        # Already in an async context — run in a separate thread with its own loop
+        def _run_in_thread():
+            thread_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(thread_loop)
+            try:
+                thread_loop.run_until_complete(run_async_migrations())
+            finally:
+                thread_loop.close()
+
+        t = threading.Thread(target=_run_in_thread, daemon=True)
+        t.start()
+        t.join()
 
 
 if context.is_offline_mode():

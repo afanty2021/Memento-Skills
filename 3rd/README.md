@@ -159,8 +159,6 @@ When updating from the original SDK source:
 
 - `middleware/im/gateway/channels/wechat_ilinkai.py` - Gateway adapter for WeChat channel
 - `cli/commands/wechat.py` - CLI commands for WeChat management
-- `gui/widgets/wechat_login_dialog.py` - GUI login dialog
-- `gui/modules/settings_panel.py` - Settings configuration panel
 
 **API Surface**:
 

@@ -9,7 +9,7 @@ This script tests the full initialization process including:
 import asyncio
 import sqlite3
 from pathlib import Path
-from core.skill.config import SkillConfig
+from shared.schema import SkillConfig
 from core.skill.gateway import SkillGateway
 from middleware.config import g_config
 

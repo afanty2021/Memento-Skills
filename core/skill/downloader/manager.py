@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from core.utils.text import to_snake_case
+from utils.strings import to_snake_case
 from utils.logger import get_logger
 
 from .base import SkillDownloader

@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 
 import requests
 
-from core.utils.text import to_kebab_case
+from utils.strings import to_kebab_case
 from utils.logger import get_logger
 
 from .base import SkillDownloader
@@ -51,6 +51,13 @@ class GitHubSkillDownloader(SkillDownloader):
             info["path"],
         )
 
+        # 如果 path 指向单个文件（如 SKILL.md），取其父目录名作为 skill 名
+        if "." in path.split("/")[-1]:
+            path_parts = path.strip("/").split("/")
+            if len(path_parts) >= 2:
+                path = "/".join(path_parts[:-1])
+                skill_name = path_parts[-2]
+
         storage_name = to_kebab_case(skill_name)
 
         # GitHub URL 中的路径名（用于临时下载目录）
@@ -90,15 +97,16 @@ class GitHubSkillDownloader(SkillDownloader):
         return None
 
     def _parse_github_tree_url(self, github_url: str) -> dict | None:
-        """解析 GitHub tree URL → owner, repo, branch, path。
+        """解析 GitHub tree/blob URL → owner, repo, branch, path.
 
         格式: https://github.com/{owner}/{repo}/tree/{branch}/{path...}
+           或: https://github.com/{owner}/{repo}/blob/{branch}/{path...}
         """
         parsed = urlparse(github_url)
         if not parsed.hostname or "github.com" not in parsed.hostname:
             return None
         parts = parsed.path.strip("/").split("/")
-        if len(parts) < 4 or parts[2] != "tree":
+        if len(parts) < 4 or parts[2] not in ("tree", "blob"):
             return None
         return {
             "owner": parts[0],

@@ -9,13 +9,19 @@ import httpx
 import shutil
 import tempfile
 
-from core.skill.config import SkillConfig
+from shared.schema import (
+    SkillConfig,
+    ExecutionMode,
+    SkillManifest,
+    SkillGovernanceMeta,
+)
 from core.skill.downloader.factory import create_default_download_manager
 from core.skill.downloader.github import GitHubSkillDownloader
+from core.skill.loader import load_from_dir
 from core.skill.retrieval.remote_recall import RemoteRecall
-from core.skill.schema import Skill, SkillManifest, SkillGovernanceMeta, ExecutionMode
-from core.skill.store import SkillStore
-from core.utils.text import to_kebab_case, to_snake_case
+from core.skill.schema import Skill
+from core.skill.store import SkillStorage
+from utils.strings import to_kebab_case, to_snake_case
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -33,7 +39,7 @@ class SkillMarket:
         self,
         *,
         config: "SkillConfig",
-        store: "SkillStore",
+        store: "SkillStorage",
         remote_recall: Optional["RemoteRecall"] = None,
     ) -> None:
         self._config = config
@@ -55,9 +61,9 @@ class SkillMarket:
             config = SkillConfig.from_global_config()
 
         # SkillStore.from_config 内部自动处理 embedding
-        store = await SkillStore.from_config(config)
+        store = await SkillStorage.from_config(config)
 
-        remote_recall = RemoteRecall.from_config(config)
+        remote_recall = await RemoteRecall.from_config(config)
 
         return cls(
             config=config,
@@ -119,7 +125,9 @@ class SkillMarket:
             if not local_path:
                 return None
 
-            skill = await self._store.load_from_path(Path(local_path))
+            skill = load_from_dir(Path(local_path), full=True)
+            if skill:
+                await self._store.add_skill(skill)
             return skill
         except Exception as e:
             logger.warning("Failed to install cloud skill '{}': {}", skill_name, e)
@@ -137,7 +145,7 @@ class SkillMarket:
 
         try:
             # 1. 验证 skill 有效性（尝试加载但不保存）
-            skill = self._store._loader.load_from_dir(source_path, full=True)
+            skill = load_from_dir(source_path, full=True)
             if not skill:
                 logger.warning("Invalid skill at '{}'", local_path)
                 return None
@@ -162,7 +170,9 @@ class SkillMarket:
             )
 
             # 3. 从目标路径加载并同步到 DB + Vector
-            installed_skill = await self._store.load_from_path(target_path)
+            installed_skill = load_from_dir(target_path, full=True)
+            if installed_skill:
+                await self._store.add_skill(installed_skill)
             return installed_skill
 
         except Exception as e:
@@ -215,7 +225,11 @@ class SkillMarket:
 
         parsed = urlparse(url)
         path_parts = parsed.path.strip("/").split("/")
-        skill_name = path_parts[-1] if path_parts else "unknown"
+        # 如果 path 以 .md 结尾，说明指向单文件，取父目录名作为 skill 名
+        if path_parts[-1].endswith(".md"):
+            skill_name = path_parts[-2] if len(path_parts) >= 2 else "unknown"
+        else:
+            skill_name = path_parts[-1] if path_parts else "unknown"
 
         logger.info("Downloading skill '{}' from GitHub URL", skill_name)
         return downloader.download(url, temp_dir, skill_name)
@@ -308,14 +322,16 @@ class SkillMarket:
         try:
             base_url = self._remote_recall._base_url
             with httpx.Client() as client:
-                print(
-                    f"Requesting download URL for skill '{skill_name}' from {base_url}..."
+                logger.debug(
+                    "Requesting download URL for skill '{}' from '{}'...", skill_name, base_url
                 )
                 resp = client.post(
                     f"{base_url}/api/v1/download",
                     json={"skill_name": skill_name},
                 )
-                print(f"Received response: status={resp.status_code}, body={resp.text}")
+                logger.debug(
+                    "Received response for skill '{}': status={}", skill_name, resp.status_code
+                )
                 if resp.status_code == 200:
                     return resp.json().get("github_url", "")
         except Exception as e:

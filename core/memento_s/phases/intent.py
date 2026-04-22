@@ -11,18 +11,22 @@ Does NOT: match skills, extract parameters, decide implementation details.
 
 from __future__ import annotations
 
-from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from core.context import ContextManager
+    from core.context.session.types import SessionGoal
 
 from pydantic import BaseModel, Field
 
-from core.manager.session_context import RECENT_ACTIONS_INTENT
+from core.protocol.types import IntentMode
+from core.context.session import build_session_context_block
 from core.prompts.templates import INTENT_PROMPT
 from middleware.llm import LLMClient
 from utils.debug_logger import log_agent_phase
 from utils.logger import get_logger
 
-from ..schemas import AgentConfig
+from ..schemas import AgentRuntimeConfig
 from ..utils import extract_json
 
 logger = get_logger(__name__)
@@ -33,15 +37,6 @@ logger = get_logger(__name__)
 # ═══════════════════════════════════════════════════════════════════
 
 
-class IntentMode(str, Enum):
-    """Four-way intent classification."""
-
-    DIRECT = "direct"
-    AGENTIC = "agentic"
-    CONFIRM = "confirm"
-    INTERRUPT = "interrupt"
-
-
 class IntentResult(BaseModel):
     """Output of the intent phase."""
 
@@ -49,50 +44,8 @@ class IntentResult(BaseModel):
     task: str = Field(description="User's task in their original language")
     task_summary: str = Field(default="", description="Short English summary for internal logging")
     intent_shifted: bool = Field(default=False)
-    ambiguity: str = Field(default="", description="Ambiguity description when mode=confirm")
-    clarification_question: str = Field(default="", description="Question to ask user when mode=confirm")
-
-
-# ═══════════════════════════════════════════════════════════════════
-# Helpers
-# ═══════════════════════════════════════════════════════════════════
-
-
-def _build_session_context_block(session_context: Any, user_content: str) -> str:
-    """Build a concise session-context block for the intent prompt."""
-    if session_context is None:
-        return "- No active session context"
-
-    lines: list[str] = []
-
-    goal = getattr(session_context, "session_goal", "")
-    if goal and goal.strip() != user_content.strip():
-        lines.append(f"- Current session goal: {goal[:150]}")
-
-    action_history = getattr(session_context, "action_history", [])
-    if action_history:
-        recent = action_history[-RECENT_ACTIONS_INTENT:]
-        summaries: list[str] = []
-        for a in recent:
-            name = getattr(a, "skill_name", "") or getattr(a, "tool_name", "unknown")
-            ok = "OK" if getattr(a, "success", False) else "FAIL"
-            res = getattr(a, "result_summary", "")[:60]
-            summaries.append(f"{name}({ok}): {res}")
-        lines.append(
-            f"- Actions so far: {len(action_history)} total. "
-            f"Recent: {'; '.join(summaries)}"
-        )
-
-    has_plan = getattr(session_context, "has_active_plan", False)
-    plan_count = getattr(session_context, "plan_step_count", 0)
-    if plan_count:
-        # Try to get done count from statuses
-        statuses = getattr(session_context, "_plan_statuses", [])
-        done = sum(1 for s in statuses if str(s) == "done")
-        lines.append(f"- Active task plan: {done}/{plan_count} steps completed")
-    lines.append(f"- Multi-step task running: {'YES' if has_plan else 'no'}")
-
-    return "\n".join(lines) if lines else "- No active session context"
+    ambiguity: str | None = Field(default=None, description="Ambiguity description when mode=confirm")
+    clarification_question: str | None = Field(default=None, description="Question to ask user when mode=confirm")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -104,22 +57,22 @@ async def recognize_intent(
     user_content: str,
     history: list[dict[str, Any]] | None,
     llm: LLMClient,
-    context_manager: Any,
-    session_context: Any = None,
-    config: AgentConfig | None = None,
+    context_manager: ContextManager,
+    session_context: SessionGoal | None = None,
+    config: AgentRuntimeConfig | None = None,
 ) -> IntentResult:
     """Recognise user intent. Preserves the user's original language in ``task``.
 
     Returns an ``IntentResult`` with ``mode``, ``task``, ``intent_shifted``,
     and optionally ``ambiguity`` / ``clarification_question`` for CONFIRM mode.
     """
-    cfg = config or AgentConfig()
+    cfg = config or AgentRuntimeConfig()
     history_summary = context_manager.build_history_summary(
         history,
         max_rounds=cfg.history_summary_max_rounds,
         max_tokens=cfg.history_summary_max_tokens,
     )
-    session_ctx_block = _build_session_context_block(session_context, user_content)
+    session_ctx_block = build_session_context_block(session_context, user_content)
 
     prompt = INTENT_PROMPT.format(
         user_message=user_content,

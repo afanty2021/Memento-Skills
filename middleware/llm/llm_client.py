@@ -18,10 +18,8 @@ import json
 import os
 import re
 import threading
-import time
 import uuid
 from dataclasses import dataclass
-from enum import StrEnum
 from typing import Any, AsyncGenerator
 
 os.environ["LITELLM_LOG"] = "WARNING"
@@ -54,35 +52,12 @@ from .utils import (
     looks_like_tool_call_text,
     sanitize_content,
 )
+from .circuit import CircuitBreaker, CircuitBreakerConfig
+from .retry import RetryConfig, parse_llm_exception, retry_with_backoff
 
 logger = get_logger()
 
-
-# ── Configuration ──────────────────────────────────────────────────
-
-
-@dataclass
-class RetryConfig:
-    """重试配置。"""
-
-    max_retries: int = 3
-    base_delay: float = 1.0
-    max_delay: float = 60.0
-    exponential_base: float = 2.0
-    retryable_exceptions: tuple = (
-        LLMTimeoutError,
-        LLMRateLimitError,
-        LLMConnectionError,
-    )
-
-
-@dataclass
-class CircuitBreakerConfig:
-    """熔断器配置。"""
-
-    failure_threshold: int = 5
-    recovery_timeout: float = 30.0
-    half_open_max_calls: int = 3
+MIN_OUTPUT_TOKENS: int = 256
 
 
 @dataclass
@@ -93,95 +68,13 @@ class RawTokenConfig:
     max_raw_token_retries: int = 1
 
 
-MIN_OUTPUT_TOKENS: int = 256
-
-
-# ── Circuit Breaker ────────────────────────────────────────────────
-
-
-class CircuitBreakerState(StrEnum):
-    """熔断器状态。"""
-
-    CLOSED = "closed"
-    OPEN = "open"
-    HALF_OPEN = "half-open"
-
-
-class CircuitBreaker:
-    """简单熔断器实现。"""
-
-    def __init__(self, config: CircuitBreakerConfig | None = None):
-        self.config = config or CircuitBreakerConfig()
-        self.failures = 0
-        self.last_failure_time: float | None = None
-        self.state = CircuitBreakerState.CLOSED
-        self.half_open_calls = 0
-        self._lock = asyncio.Lock()
-
-    async def call(self, func, *args, **kwargs):
-        """在熔断器保护下执行函数。"""
-        async with self._lock:
-            if self.state == CircuitBreakerState.OPEN:
-                if (
-                    time.time() - (self.last_failure_time or 0)
-                    > self.config.recovery_timeout
-                ):
-                    self.state = CircuitBreakerState.HALF_OPEN
-                    self.half_open_calls = 0
-                    logger.info("Circuit breaker entering half-open state")
-                else:
-                    raise LLMConnectionError("Circuit breaker is open")
-
-            if (
-                self.state == CircuitBreakerState.HALF_OPEN
-                and self.half_open_calls >= self.config.half_open_max_calls
-            ):
-                raise LLMConnectionError("Circuit breaker half-open limit reached")
-
-            if self.state == CircuitBreakerState.HALF_OPEN:
-                self.half_open_calls += 1
-
-        try:
-            result = await func(*args, **kwargs)
-            await self._on_success()
-            return result
-        except LLMException as e:
-            if e.retryable:
-                await self._on_failure()
-            raise
-        except Exception as e:
-            await self._on_failure(e)
-            raise
-
-    async def _on_success(self):
-        async with self._lock:
-            self.failures = 0
-            if self.state == CircuitBreakerState.HALF_OPEN:
-                self.state = CircuitBreakerState.CLOSED
-                self.half_open_calls = 0
-                logger.info("Circuit breaker closed")
-
-    async def _on_failure(self, error: Exception | None = None):
-        if error and isinstance(error, LLMException) and not error.retryable:
-            return
-        async with self._lock:
-            self.failures += 1
-            self.last_failure_time = time.time()
-
-            if self.failures >= self.config.failure_threshold:
-                if self.state != CircuitBreakerState.OPEN:
-                    self.state = CircuitBreakerState.OPEN
-                    logger.warning(
-                        f"Circuit breaker opened after {self.failures} failures"
-                    )
-
-
 # ── Module-level helpers ───────────────────────────────────────────
 
 
 async def _run_acompletion(completion_kwargs: dict[str, Any]) -> Any:
     """Module-level async wrapper for litellm acompletion (避免嵌套 def)。"""
-    return await acompletion(**completion_kwargs)
+    clean_kwargs = {k: v for k, v in completion_kwargs.items() if v is not None}
+    return await acompletion(**clean_kwargs)
 
 
 def _try_parse_json_tool_call(text: str) -> ToolCall | None:
@@ -319,31 +212,22 @@ class LLMClient:
             self.api_key = profile.api_key
             self.base_url = profile.base_url
             self.litellm_provider = getattr(profile, "litellm_provider", "")
-            self.context_window = self._detect_context_window(profile)
-            self.max_tokens = profile.max_tokens
+
+            # 源头守卫：确保从 profile 取出的值不是 None
+            # 兜底值与 LLMProfile schema 默认值一致
+            _detected_cw = self._detect_context_window(profile)
+            _profile_cw = profile.context_window if isinstance(profile.context_window, int) else 0
+            effective_cw = min(_detected_cw, _profile_cw) if _profile_cw > 0 else _detected_cw
+
+            # 写入 profile 和实例变量
+            profile.context_window = effective_cw
+            self.context_window = effective_cw
+            self.max_tokens = profile.max_tokens if isinstance(profile.max_tokens, int) else 4096
+            profile.max_tokens = self.max_tokens  # 回写，保证一致性
             self.temperature = profile.temperature
             self.timeout = profile.timeout
             self.extra_headers = profile.extra_headers
             self.extra_body = profile.extra_body
-
-            # 平衡策略：取 auto-detected 与用户配置的较小值回写到 profile。
-            # - 不超过模型实际能力（auto-detected）
-            # - 不超过用户设定的性能上限（profile.context_window）
-            effective_cw = min(self.context_window, profile.context_window)
-            if effective_cw != profile.context_window:
-                logger.info(
-                    "Capping profile context_window: {} -> {} (model limit)",
-                    profile.context_window,
-                    effective_cw,
-                )
-            elif self.context_window > profile.context_window:
-                logger.info(
-                    "Respecting user context_window cap: {} (model supports {})",
-                    profile.context_window,
-                    self.context_window,
-                )
-            profile.context_window = effective_cw
-            self.context_window = effective_cw
 
             logger.info(
                 f"LLM client initialized with model: {self.model}, "
@@ -365,9 +249,9 @@ class LLMClient:
 
     @staticmethod
     def _detect_context_window(profile) -> int:
-        """尝试通过 litellm 自动检测模型 context window，失败则用 profile 默认值。"""
+        """尝试通过 litellm 自动检测模型 context window，失败则用 profile 默认值（保底 100000）。"""
         if not profile.model:
-            return profile.context_window
+            return profile.context_window if isinstance(profile.context_window, int) else 100000
         candidates = [profile.model]
         model_name = profile.model.split("/", 1)[-1] if "/" in profile.model else ""
         if model_name and model_name != profile.model:
@@ -386,7 +270,8 @@ class LLMClient:
                     return detected
             except Exception:
                 continue
-        return profile.context_window
+        _fallback = profile.context_window if isinstance(profile.context_window, int) else 100000
+        return _fallback
 
     @staticmethod
     def _is_known_model(model: str) -> bool:
@@ -449,6 +334,20 @@ class LLMClient:
 
             fixed_calls: list[dict[str, Any]] = []
             for tc in tool_calls:
+                # ToolCall dataclass对象 → 转为 dict
+                if hasattr(tc, "as_dict"):
+                    tc = tc.as_dict()
+                elif hasattr(tc, "__dataclass_fields__") and not isinstance(tc, dict):
+                    tc = {
+                        "id": getattr(tc, "id", None),
+                        "type": getattr(tc, "type", "function"),
+                        "function": {
+                            "name": getattr(tc, "name", ""),
+                            "arguments": json.dumps(getattr(tc, "arguments", {}))
+                            if isinstance(getattr(tc, "arguments", None), dict)
+                            else str(getattr(tc, "arguments", "{}")),
+                        },
+                    }
                 if not isinstance(tc, dict):
                     continue
 
@@ -522,10 +421,10 @@ class LLMClient:
            set content to None (Gemini / DeepSeek require non-empty-string).
         2. Assistant message with no content AND no tool_calls, followed by
            tool-role messages → the original tool_calls were lost (e.g. raw
-           XML tool calls that got sanitized).  Convert the whole group
-           (empty assistant + subsequent tool msgs) into user messages so
-           the conversation context is preserved without violating API
-           constraints.
+           XML tool calls that got sanitized).  Drop the empty assistant and
+           its trailing tool messages to avoid orphaned tool messages, which
+           cause "Message has tool role, but there was no previous assistant
+           message with a tool call!" from the server.
         """
         fixed: list[dict[str, Any]] = []
         i = 0
@@ -536,21 +435,12 @@ class LLMClient:
             has_tool_calls = bool(msg.get("tool_calls"))
 
             if role == "assistant" and not content and not has_tool_calls:
-                # Collect any immediately following tool messages
+                # tool_calls were already stripped by _normalize_messages.
+                # Drop the empty assistant and its trailing tool messages —
+                # they are orphaned and would cause server TemplateError.
                 j = i + 1
-                tool_parts: list[str] = []
                 while j < len(messages) and messages[j].get("role") == "tool":
-                    tool_content = str(messages[j].get("content", ""))
-                    tool_parts.append(tool_content[:500])
                     j += 1
-                if tool_parts:
-                    fixed.append(
-                        {
-                            "role": "user",
-                            "content": "[Tool Result]\n" + "\n---\n".join(tool_parts),
-                        }
-                    )
-                # else: drop orphaned empty assistant with no following tool msgs
                 i = j
                 continue
 
@@ -596,17 +486,19 @@ class LLMClient:
             messages = converted
 
         input_tokens = count_tokens_messages(messages, model=self.model, tools=tools)
-        effective_max = min(self.max_tokens, self.context_window - input_tokens)
+        _context_window = max(0, self.context_window) if isinstance(self.context_window, int) else 0
+        _configured_max = self.max_tokens if isinstance(self.max_tokens, int) else (_context_window // 2)
+        effective_max = min(_configured_max, _context_window - input_tokens)
         effective_max = max(effective_max, MIN_OUTPUT_TOKENS)
 
-        if input_tokens >= self.context_window:
+        if input_tokens >= (self.context_window or 0):
             logger.warning(
                 "Input tokens ({}) exceed context window ({}), request will likely fail",
                 input_tokens,
                 self.context_window,
             )
 
-        if effective_max < self.max_tokens:
+        if effective_max < (self.max_tokens or 0):
             logger.info(
                 "max_tokens capped: {} -> {} (context_window={}, input={})",
                 self.max_tokens,
@@ -619,6 +511,7 @@ class LLMClient:
             "model": model_str,
             "messages": messages,
             "max_tokens": effective_max,
+            "max_completion_tokens": effective_max,
             "temperature": self.temperature,
             "timeout": self.timeout,
             "drop_params": True,
@@ -636,49 +529,16 @@ class LLMClient:
         if tools:
             kwargs["tools"] = tools
 
-        if "max_tokens" in extra:
+        if "max_tokens" in extra and isinstance(extra["max_tokens"], int):
             extra["max_tokens"] = min(extra["max_tokens"], effective_max)
         kwargs.update(extra)
+
+        # 最终清理在 _run_acompletion 中进行
         return kwargs
 
     def _parse_error(self, error: Exception, model: str) -> LLMException:
-        """解析异常为统一的 LLMException, 优先使用 litellm 异常类型匹配。"""
-        if isinstance(error, litellm.Timeout):
-            return LLMTimeoutError(model=model)
-        if isinstance(error, litellm.RateLimitError):
-            retry_after = getattr(error, "retry_after", None)
-            return LLMRateLimitError(model=model, retry_after=retry_after)
-        if isinstance(error, (litellm.APIConnectionError, ConnectionError, OSError)):
-            return LLMConnectionError(model=model)
-        if isinstance(error, litellm.AuthenticationError):
-            return LLMAuthenticationError(model=model)
-        if isinstance(error, litellm.ContentPolicyViolationError):
-            return LLMContentFilterError(model=model)
-        if isinstance(error, litellm.BadRequestError):
-            error_msg = str(error)
-            if "LLM Provider NOT provided" in error_msg:
-                friendly_msg = f"模型配置错误: {model}\n\n请使用正确的 provider/model 格式，例如:\n- openai/gpt-4\n- anthropic/claude-3-opus\n- openrouter/claude-3.5-sonnet\n- ollama_chat/llama3\n\n查看所有支持的 provider: https://docs.litellm.ai/docs/providers"
-                return LLMException(friendly_msg, model=model, retryable=False)
-            return LLMException(error_msg, model=model, retryable=False)
-
-        error_str = str(error).lower()
-        if "timeout" in error_str:
-            return LLMTimeoutError(model=model)
-        if "rate limit" in error_str or "429" in error_str:
-            return LLMRateLimitError(model=model)
-        if "connection" in error_str or "network" in error_str:
-            return LLMConnectionError(model=model)
-        if "authentication" in error_str or "401" in error_str or "403" in error_str:
-            return LLMAuthenticationError(model=model)
-        if "content filter" in error_str or "moderation" in error_str:
-            return LLMContentFilterError(model=model)
-
-        if (
-            "context" in error_str
-            and ("window" in error_str or "length" in error_str or "limit" in error_str)
-        ) or "contextwindowexceeded" in error_str.replace(" ", ""):
-            return LLMContextWindowError(model=model)
-        return LLMException(str(error), model=model, retryable=True)
+        """解析异常为统一的 LLMException（委托给 retry 模块）。"""
+        return parse_llm_exception(error, model)
 
     async def _call_with_retry(
         self,
@@ -686,35 +546,14 @@ class LLMClient:
         *args,
         **kwargs,
     ) -> Any:
-        """带重试机制的调用。"""
-        last_exception = None
-
-        for attempt in range(self.retry_config.max_retries + 1):
-            try:
-                return await func(*args, **kwargs)
-            except Exception as e:
-                llm_error = self._parse_error(e, self.model)
-                last_exception = llm_error
-
-                if not llm_error.retryable or attempt >= self.retry_config.max_retries:
-                    raise llm_error
-
-                delay = min(
-                    self.retry_config.base_delay
-                    * (self.retry_config.exponential_base**attempt),
-                    self.retry_config.max_delay,
-                )
-
-                if isinstance(llm_error, LLMRateLimitError) and llm_error.retry_after:
-                    delay = max(delay, llm_error.retry_after)
-
-                logger.warning(
-                    f"LLM call failed (attempt {attempt + 1}/{self.retry_config.max_retries + 1}), "
-                    f"retrying in {delay:.1f}s: {llm_error.message}"
-                )
-                await asyncio.sleep(delay)
-
-        raise last_exception
+        """带重试机制的调用（委托给 retry 模块）。"""
+        return await retry_with_backoff(
+            func,
+            *args,
+            config=self.retry_config,
+            model=self.model,
+            **kwargs,
+        )
 
     def _parse_tool_calls(self, raw_tool_calls: list[Any] | None) -> list[ToolCall]:
         """解析 tool calls（非流式），包含 JSON 修复兜底。"""
@@ -1213,7 +1052,7 @@ class LLMClient:
                         if looks_like_tool_call_text(accumulated_content):
                             _raw_tokens_detected = True
                             logger.warning(
-                                "Stream: raw tool tokens detected mid-stream at chunk %d, "
+                                "Stream: raw tool tokens detected mid-stream at chunk {}, "
                                 "suppressing further content output",
                                 chunk_count,
                             )

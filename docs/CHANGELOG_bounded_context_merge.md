@@ -101,7 +101,7 @@ Layer 3: Bounded Prompt 组装
 - `core/skill/execution/policy/pre_execute.py` — 通过 dependency_aliases 归一化
 - `core/skill/execution/policy/recovery.py` — `INTERNAL_ERROR → ABORT`（保留 GITLAB 更安全的策略）
 - `core/skill/execution/executor.py` — `session_info` 方式（保留 GITLAB 架构）
-- GUI 所有改动（sidebar、file_browser、chat_message、toolbar、layout 等）
+- **Electron GUI 所有改动（sidebar、file_browser、chat_message、toolbar、layout 等）**
 - 飞书 bridge 完整实现
 - 自动更新加固脚本
 - `builtin/tools/bash.py` — 结构化拒绝消息

@@ -150,6 +150,11 @@ class Conversation(Base):
         String(36), ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False
     )
 
+    # 对话轮次ID（同一轮对话的多个事件共享同一个 conversation_id）
+    conversation_id: Mapped[str] = mapped_column(
+        String(36), nullable=False, comment="对话轮次ID，同一轮对话的多条记录共享"
+    )
+
     # 序列号（在 Session 中的顺序，从1开始）
     sequence: Mapped[int] = mapped_column(
         Integer, nullable=False, comment="在 Session 中的序号"
@@ -202,6 +207,7 @@ class Conversation(Base):
         Index("idx_conversation_sequence", "session_id", "sequence"),
         Index("idx_conversation_role", "role"),
         Index("idx_conversation_updated", "updated_at"),
+        Index("idx_conversation_conv_id", "conversation_id"),
     )
 
 

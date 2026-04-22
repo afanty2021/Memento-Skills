@@ -4,11 +4,11 @@ import json
 
 import pytest
 
-from core.memento_s.tool_dispatcher import ToolDispatcher
+from core.memento_s.skill_dispatch import SkillDispatcher
 
 
 @pytest.mark.asyncio
-async def test_read_skill_missing_name(real_dispatcher: ToolDispatcher):
+async def test_read_skill_missing_name(real_dispatcher: SkillDispatcher):
     raw = await real_dispatcher.execute("read_skill", {})
     payload = json.loads(raw)
 

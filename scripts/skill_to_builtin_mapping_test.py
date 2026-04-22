@@ -1,8 +1,8 @@
-"""Skill Executor 与 Builtin Tools 映射关系测试
+"""Skill Agent 与 Tools 映射关系测试
 
 测试范围:
-1. Builtin Tools 直接调用测试
-2. Knowledge Skill -> Operations -> Builtin Tools 映射
+1. Tools 直接调用测试
+2. Knowledge Skill -> Operations -> Tools 映射
 3. 不同 operation 类型的映射验证
 4. 完整的 Skill 执行链验证
 
@@ -24,15 +24,15 @@ os.environ["LOG_LEVEL"] = "DEBUG"
 from middleware.config import g_config
 from utils.logger import setup_logger, get_logger
 from core.skill.gateway import SkillGateway
-from core.skill.config import SkillConfig
+from shared.schema import SkillConfig
 from core.skill.schema import Skill
-from core.skill.execution import SkillExecutor
-from builtin.tools import (
-    execute_builtin_tool,
+from core.skill.execution import SkillAgent
+from shared.tools import (
+    execute_tool,
     is_builtin_tool,
-    BUILTIN_TOOL_REGISTRY,
-    BUILTIN_TOOL_SCHEMAS,
+    get_tool_schemas,
 )
+from tools import init_registry
 
 # 初始化日志
 setup_logger(
@@ -92,14 +92,14 @@ def _log_result(name: str, passed: bool, duration_ms: float, details: str = "") 
 
 
 class SkillToBuiltinMappingTester:
-    """Skill 到 Builtin Tools 映射测试器"""
+    """Skill 到 Tools 映射测试器"""
 
     def __init__(self, gateway: SkillGateway):
         self.gateway = gateway
-        self.executor = SkillExecutor()
+        self.agent = SkillAgent(gateway._config)
         self.results: list[MappingTestResult] = []
 
-        # Operation 到 Builtin Tool 的映射定义
+        # Operation 到 Tool 的映射定义
         self.op_to_tool_map = {
             "run_command": "bash",
             "read_file": "read_file",
@@ -110,12 +110,14 @@ class SkillToBuiltinMappingTester:
 
     async def run_all_tests(self) -> None:
         """运行所有映射测试"""
-        _banner("SKILL TO BUILTIN TOOLS MAPPING TEST")
+        _banner("SKILL TO TOOLS MAPPING TEST")
 
-        logger.info("Starting Skill-to-Builtin mapping test...")
-        logger.info(f"Available builtin tools: {list(BUILTIN_TOOL_REGISTRY.keys())}")
+        logger.info("Starting Skill-to-Tools mapping test...")
+        schemas = get_tool_schemas()
+        tool_names = [t.get("function", {}).get("name", "") for t in schemas]
+        logger.info(f"Available tools: {tool_names}")
 
-        # Phase 1: Builtin Tools 直接测试
+        # Phase 1: Tools 直接测试
         await self._test_builtin_tools_directly()
 
         # Phase 2: Skill.md 命令提取测试
@@ -153,7 +155,7 @@ class SkillToBuiltinMappingTester:
                 is_builtin = is_builtin_tool(tool_name)
 
                 # 执行 tool
-                result = await execute_builtin_tool(tool_name, args)
+                result = await execute_tool(tool_name, args)
                 duration = (time.perf_counter() - start) * 1000
 
                 # read_file/list_dir 可能因为测试文件/目录问题返回 ERR，但仍视为测试通过

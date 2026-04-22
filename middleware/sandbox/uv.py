@@ -6,14 +6,14 @@ import os
 import platform
 import shutil
 import subprocess
+import sys
 import tempfile
 import traceback
 from pathlib import Path
-from typing import Any
 
 from middleware.config import g_config
 from utils.logger import get_logger
-from .artifacts import ArtifactManager
+from shared.fs.snapshot import SandboxSnapshot as SandboxArtifactCollector
 from .base import BaseSandbox
 from .env_builder import build_env
 from .schema import ErrorType, SandboxExecutionOutcome
@@ -26,11 +26,54 @@ from middleware.utils.platform import (
     chmod_executable,
     uv_install_hint,
 )
-from core.shared.dependency_aliases import normalize_dependency_spec
+from shared.tools.dependency_aliases import normalize_dependency_spec
 
 logger = get_logger(__name__)
 
+# UV 静默环境变量 - 禁用所有进度条和彩色输出
+_UV_QUIET_ENV: dict[str, str] = {
+    "UV_NO_PROGRESS": "1",
+    "UV_NO_COLOR": "1",
+    "UV_QUIET": "1",
+}
+
 _STDERR_TRUNCATE_LEN = 2000
+
+
+def _get_hidden_subprocess_startupinfo() -> subprocess.STARTUPINFO | None:
+    """获取隐藏子进程窗口的 STARTUPINFO。
+
+    Returns:
+        Windows 平台的 STARTUPINFO 对象，非 Windows 返回 None
+    """
+    if sys.platform == "win32":
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = subprocess.SW_HIDE
+        return startupinfo
+    return None
+
+
+def _get_hidden_subprocess_creationflags() -> int:
+    """获取隐藏子进程窗口的 creationflags。
+
+    Returns:
+        Windows 的 CREATE_NO_WINDOW 标志，非 Windows 返回 0
+    """
+    if sys.platform == "win32":
+        return subprocess.CREATE_NO_WINDOW
+    return 0
+
+
+def _build_uv_env() -> dict[str, str]:
+    """构建 uv 命令的环境变量，添加静默设置。
+
+    Returns:
+        包含静默环境变量的字典
+    """
+    env = build_env(full_system_env=True)
+    env.update(_UV_QUIET_ENV)
+    return env
 _STDOUT_TRUNCATE_LEN = 2000
 _ERROR_MSG_TRUNCATE_LEN = 4000
 _INSTALL_STDERR_TRUNCATE_LEN = 500
@@ -52,6 +95,7 @@ class UvLocalSandbox(BaseSandbox):
         self._uv_bin: Path | None = None
         self._venv_path: Path | None = None
         self._python_executable: Path | None = None
+        self._installed_deps: set[str] = set()
         self._ensure_uv_installed()
         self._setup_venv()
 
@@ -95,6 +139,7 @@ class UvLocalSandbox(BaseSandbox):
             needs_create = True
 
         if needs_create:
+            self._installed_deps.clear()
             self._create_venv(python_version)
         else:
             logger.debug("Using existing venv at {}", self._venv_path)
@@ -121,18 +166,26 @@ class UvLocalSandbox(BaseSandbox):
 
         cmd = [
             str(self._uv_bin),
+            "-q",  # 静默模式，避免终端闪烁
+            "--no-progress",  # 禁用进度条
             "venv",
             str(self._venv_path),
             "--python",
             python_version,
         ]
 
+        startupinfo = _get_hidden_subprocess_startupinfo()
+        creationflags = _get_hidden_subprocess_creationflags()
+        env = _build_uv_env()
+
         try:
             subprocess.run(
                 cmd,
                 capture_output=True,
                 check=True,
-                env=build_env(full_system_env=True),
+                env=env,
+                startupinfo=startupinfo,
+                creationflags=creationflags,
                 **SUBPROCESS_TEXT_KWARGS,
             )
             logger.info("Virtual environment created successfully")
@@ -146,17 +199,31 @@ class UvLocalSandbox(BaseSandbox):
         """在 venv 中创建 pip 包装脚本。
 
         uv venv 默认不包含 pip，创建 shim 调用 'python -m pip'。
+        注意：不使用 install_python_deps() 安装 pip，避免递归创建新 sandbox 实例。
         """
         pip_path = pip_shim_path(self._venv_path)
         pip_path.write_text(pip_shim_content(self._python_executable))
         chmod_executable(pip_path)
         logger.debug("Created pip shim at {}", pip_path)
 
-        success, _ = self.install_python_deps(["pip"], timeout=60)
-        if success:
-            logger.debug("Installed pip into venv")
+        startupinfo = _get_hidden_subprocess_startupinfo()
+        creationflags = _get_hidden_subprocess_creationflags()
+
+        # 验证 pip shim 是否可用
+        pip_executable = pip_shim_path(self._venv_path)
+        result = subprocess.run(
+            [str(pip_executable), "--version"],
+            capture_output=True,
+            shell=False,
+            startupinfo=startupinfo,
+            creationflags=creationflags,
+            **SUBPROCESS_TEXT_KWARGS,
+        )
+        if result.returncode == 0:
+            # logger.debug("pip shim is functional: {}", result.stdout.strip())
+            self._installed_deps.add("pip")
         else:
-            logger.debug("Could not install pip into venv (non-fatal)")
+            logger.debug("pip shim not yet functional (non-fatal): {}", result.stderr.strip())
 
     def install_python_deps(
         self,
@@ -191,16 +258,27 @@ class UvLocalSandbox(BaseSandbox):
                     logger.debug(
                         "Cross-platform fix: 'python-magic' -> 'python-magic-bin' for Windows"
                     )
-        cmd = [str(self._uv_bin), "pip", "install", *deps]
+        # Skip already-installed deps (cache within this sandbox instance).
+        to_install = [d for d in deps if d not in self._installed_deps]
+        if not to_install:
+            return True, ""
 
-        logger.info("Installing dependencies: {}", deps)
+        cmd = [str(self._uv_bin), "-q", "pip", "install", *to_install]
+
+        startupinfo = _get_hidden_subprocess_startupinfo()
+        creationflags = _get_hidden_subprocess_creationflags()
+
+        logger.info("Installing dependencies: {}", to_install)
+        env = _build_uv_env()
         try:
             proc = subprocess.run(
                 cmd,
                 capture_output=True,
                 check=False,
-                env=build_env(full_system_env=True),
+                env=env,
                 timeout=timeout,
+                startupinfo=startupinfo,
+                creationflags=creationflags,
                 **SUBPROCESS_TEXT_KWARGS,
             )
         except subprocess.TimeoutExpired:
@@ -214,7 +292,8 @@ class UvLocalSandbox(BaseSandbox):
                 return False, stderr
             return False, f"uv pip install failed (code {proc.returncode})"
 
-        logger.info("Dependencies installed successfully")
+        logger.info("Dependencies installed successfully: {} (cached: {})", to_install, len([d for d in to_install if d in self._installed_deps]))
+        self._installed_deps.update(to_install)
         return True, ""
 
     def execute_shell(
@@ -244,9 +323,11 @@ class UvLocalSandbox(BaseSandbox):
             workspace_root.mkdir(parents=True, exist_ok=True)
 
             # Snapshot files before execution
-            pre_files = ArtifactManager.snapshot_files(workspace_root)
+            pre_files = SandboxArtifactCollector.take(workspace_root)
             effective_work_dir = workspace_root
 
+        startupinfo = _get_hidden_subprocess_startupinfo()
+        creationflags = _get_hidden_subprocess_creationflags()
         try:
             result = subprocess.run(
                 command,
@@ -256,6 +337,8 @@ class UvLocalSandbox(BaseSandbox):
                 cwd=effective_work_dir,
                 env=env,
                 timeout=timeout,
+                startupinfo=startupinfo,
+                creationflags=creationflags,
             )
 
             stdout = result.stdout.strip()
@@ -264,11 +347,9 @@ class UvLocalSandbox(BaseSandbox):
             # Collect artifacts if requested
             artifacts = []
             if collect_artifacts and pre_files and effective_work_dir:
-                artifacts = ArtifactManager.collect_local_artifacts(
-                    effective_work_dir,
+                artifacts = SandboxArtifactCollector.collect_diff(
                     pre_files,
-                    "shell",
-                    session_id=session_id or "default",
+                    effective_work_dir,
                 )
 
             if result.returncode != 0:
@@ -325,6 +406,9 @@ class UvLocalSandbox(BaseSandbox):
         if extra_env:
             env.update(extra_env)
 
+        startupinfo = _get_hidden_subprocess_startupinfo()
+        creationflags = _get_hidden_subprocess_creationflags()
+
         try:
             proc = subprocess.run(
                 cmd,
@@ -332,6 +416,8 @@ class UvLocalSandbox(BaseSandbox):
                 env=env,
                 capture_output=True,
                 timeout=timeout,
+                startupinfo=startupinfo,
+                creationflags=creationflags,
                 **SUBPROCESS_TEXT_KWARGS,
             )
         except subprocess.TimeoutExpired:
@@ -454,17 +540,20 @@ class UvLocalSandbox(BaseSandbox):
         try:
             if source_dir:
                 self._prepare_workspace(source_dir, work_dir)
-            pre_files = ArtifactManager.snapshot_files(work_dir)
-            runner_path = work_dir / "__runner__.py"
+            pre_files = SandboxArtifactCollector.take(work_dir)
+            runner_path = work_dir / f"__runner__{session_id}.py"
             runner_path.write_text(code, encoding="utf-8")
 
             logger.info("Sandbox executing '{}' in {}", name, work_dir)
 
+            _timeout = getattr(
+                g_config.skills.execution, "bash_timeout_sec", 300
+            ) or 300
             result = self.run(
                 [str(self._python_executable), str(runner_path)],
                 cwd=work_dir,
                 pythonpath=work_dir,
-                timeout=g_config.skills.execution.timeout_sec,
+                timeout=_timeout,
                 skill_name=name,
                 check_syntax=code,
                 extra_env=extra_env,
@@ -480,8 +569,9 @@ class UvLocalSandbox(BaseSandbox):
                     skill_name=name,
                 )
 
-            artifacts = ArtifactManager.collect_local_artifacts(
-                work_dir, pre_files, name, session_id=session_id
+            artifacts = SandboxArtifactCollector.collect_diff(
+                pre_files,
+                work_dir,
             )
             logger.info("Sandbox success for '{}'", name)
             return SandboxExecutionOutcome(

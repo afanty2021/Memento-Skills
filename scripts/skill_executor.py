@@ -1,11 +1,11 @@
-"""Standalone SkillExecutor test runner.
+"""Standalone SkillGateway test runner (SkillAgent-backed).
 
 Usage examples:
   python scripts/skill_executor.py
   python scripts/skill_executor.py --list
   python scripts/skill_executor.py --skill filesystem --request "list files in ."
 
-This script executes the full SkillGateway flow (provider -> executor) so you can
+This script executes the full SkillGateway flow (provider -> SkillAgent) so you can
 compare tool_calls / python fallback / text-only responses across skills.
 """
 
@@ -182,14 +182,13 @@ async def _run_cases(provider: SkillGateway) -> None:
 async def main() -> None:
     g_config.load()
 
-    parser = argparse.ArgumentParser(description="Run SkillExecutor tests")
+    parser = argparse.ArgumentParser(description="Run SkillGateway tests")
     parser.add_argument("--list", action="store_true", help="List local skills")
     parser.add_argument("--skill", type=str, help="Skill name to execute")
     parser.add_argument("--request", type=str, help="Request text for the skill")
     args = parser.parse_args()
 
-    from core.skill.config import SkillConfig
-    from core.skill.store import SkillStore
+    from shared.schema import SkillConfig
 
     config = SkillConfig.from_global_config()
     provider = await SkillGateway.from_config(config)

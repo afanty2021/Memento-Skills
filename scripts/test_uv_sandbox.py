@@ -18,8 +18,6 @@ from typing import Callable, Iterable
 from middleware.config import g_config
 from middleware.sandbox import UvLocalSandbox
 from core.skill.schema import Skill
-from middleware.sandbox.artifacts import ArtifactManager
-
 
 @dataclass
 class CaseResult:
@@ -30,7 +28,6 @@ class CaseResult:
     artifacts: list[str]
     duration_ms: int
     work_dir: str | None = None
-    output_dir: str | None = None
     extra: dict[str, str] = field(default_factory=dict)
 
 
@@ -53,7 +50,6 @@ class Recorder:
             "artifacts": case.artifacts,
             "duration_ms": case.duration_ms,
             "work_dir": case.work_dir,
-            "output_dir": case.output_dir,
             "extra": case.extra,
         }
         log_path = self.log_dir / f"{case.name}.json"
@@ -83,7 +79,7 @@ class CaseRunner:
             name=skill_name,
             description="",
             instruction="",
-            code=code,  # code is required field
+            code=code,
         )
         start = time.time()
         result = self.sandbox.run_code(
@@ -104,12 +100,6 @@ class CaseRunner:
             artifacts=result.artifacts or [],
             duration_ms=elapsed_ms,
         )
-
-        if record_paths:
-            work_dir = ArtifactManager.get_sandbox_dir(skill.name, actual_session)
-            output_dir = ArtifactManager.get_output_dir(skill.name, actual_session)
-            case_result.work_dir = str(work_dir)
-            case_result.output_dir = str(output_dir)
 
         self.recorder.log_case(case_result)
         return case_result
@@ -158,8 +148,6 @@ def print_case(case: CaseResult) -> None:
     print(f"  duration_ms: {case.duration_ms}")
     if case.work_dir:
         print(f"  work_dir: {case.work_dir}")
-    if case.output_dir:
-        print(f"  output_dir: {case.output_dir}")
     if case.result:
         print("  result:")
         print(f"{case.result}")

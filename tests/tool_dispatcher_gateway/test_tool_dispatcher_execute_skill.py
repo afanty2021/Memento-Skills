@@ -4,13 +4,13 @@ import json
 
 import pytest
 
-from core.memento_s.tool_dispatcher import ToolDispatcher
-from core.skill.gateway import SkillManifest
+from core.memento_s.skill_dispatch import SkillDispatcher
 from core.skill.gateway import SkillGateway
+from shared.schema import SkillManifest
 
 
 @pytest.mark.asyncio
-async def test_execute_skill_missing_name_real_gateway(real_dispatcher: ToolDispatcher):
+async def test_execute_skill_missing_name_real_gateway(real_dispatcher: SkillDispatcher):
     raw = await real_dispatcher.execute("execute_skill", {"request": "hello"})
     payload = json.loads(raw)
 
@@ -20,7 +20,7 @@ async def test_execute_skill_missing_name_real_gateway(real_dispatcher: ToolDisp
 
 
 @pytest.mark.asyncio
-async def test_execute_skill_not_found_real_gateway(real_dispatcher: ToolDispatcher):
+async def test_execute_skill_not_found_real_gateway(real_dispatcher: SkillDispatcher):
     # Unknown skill without prior search_skill → SEARCH_REQUIRED
     raw = await real_dispatcher.execute(
         "execute_skill",
@@ -40,7 +40,7 @@ async def test_execute_skill_not_found_real_gateway(real_dispatcher: ToolDispatc
 
 @pytest.mark.asyncio
 async def test_execute_skill_knowledge_success_real_gateway(
-    real_dispatcher: ToolDispatcher,
+    real_dispatcher: SkillDispatcher,
 ):
     provider = real_dispatcher._gateway
     assert isinstance(provider, SkillGateway)

@@ -19,7 +19,7 @@ openai>=1.0.0
 litellm>=1.81.10
 
 # MCP Client
-mcp>=1.0.0
+mcp>=1.27.0
 
 # Web Search & Crawling
 google_search_results>=2.4.0

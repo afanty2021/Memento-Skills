@@ -2,11 +2,69 @@
 
 from __future__ import annotations
 
+import re
 from abc import ABC, abstractmethod
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
 from .schema import SandboxExecutionOutcome
+
+
+class RuntimeType(str, Enum):
+    """Runtime type for sandbox selection."""
+
+    PYTHON = "python"
+    NODE = "node"
+    AUTO = "auto"
+
+
+# Detection patterns for Node.js commands
+_NODE_CMD_PATTERNS: re.Pattern[re.RegexFlag] = re.compile(
+    r"^\s*(?:"
+    r"npm\s|"
+    r"pnpm\s|"
+    r"yarn\s|"
+    r"bun\s|"
+    r"node\s|"
+    r"deno\s|"
+    r"npx\s|"
+    r"tsx\s|"
+    r"ts-node\s|"
+    r"vite\s|"
+    r"esbuild\s|"
+    r"webpack\s|"
+    r"rollup\s|"
+    r"parcel\s|"
+    r"eslint\s|"
+    r"prettier\s"
+    r")",
+    re.IGNORECASE,
+)
+
+# File extension patterns for JS/TS/TSX detection
+_NODE_FILE_PATTERNS: re.Pattern[re.RegexFlag] = re.compile(
+    r"\.(?:js|jsx|ts|tsx|mjs|cjs)$",
+    re.IGNORECASE,
+)
+
+
+def detect_runtime(command: str) -> RuntimeType:
+    """Auto-detect the runtime type from a shell command.
+
+    Returns:
+        RuntimeType.NODE if the command appears to be a Node.js ecosystem command,
+        RuntimeType.PYTHON otherwise.
+    """
+    # Check for JS/TS file path references
+    if _NODE_FILE_PATTERNS.search(command):
+        return RuntimeType.NODE
+
+    # Check for Node.js ecosystem commands
+    if _NODE_CMD_PATTERNS.match(command):
+        return RuntimeType.NODE
+
+    return RuntimeType.PYTHON
 
 
 class BaseSandbox(ABC):
@@ -82,8 +140,23 @@ class BaseSandbox(ABC):
         raise NotImplementedError
 
 
-def get_sandbox() -> BaseSandbox:
-    """Get the default sandbox instance."""
+def get_sandbox(runtime: RuntimeType = RuntimeType.PYTHON) -> BaseSandbox:
+    """Get a sandbox instance for the given runtime type.
+
+    Args:
+        runtime: The runtime type (python/node/auto). Default is PYTHON.
+
+    Returns:
+        A sandbox instance. For PYTHON returns UvLocalSandbox.
+        For NODE returns NodeSandbox.
+        For AUTO, callers should use detect_runtime() first and pass the result.
+    """
+    if runtime == RuntimeType.NODE:
+        from .node_sandbox import NodeSandbox
+
+        return NodeSandbox()
+
+    # Default: Python sandbox
     from .uv import UvLocalSandbox
 
     return UvLocalSandbox()

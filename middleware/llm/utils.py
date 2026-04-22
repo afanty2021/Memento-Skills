@@ -112,6 +112,9 @@ def looks_like_tool_call_text(content: str) -> bool:
     """检测 LLM 文本输出是否像未成功解析的 tool call。
 
     覆盖所有主流模型的控制 token / raw tool call 格式。
+    注意: 不检测纯 JSON 格式的工具调用，因为这种情况会通过
+    finish_reason=tool_calls 和结构化字段正确返回，不需要靠正则检测。
+    检测 JSON 格式容易误判论文、文档中的正常 JSON 示例。
     """
     if not content:
         return False
@@ -121,7 +124,6 @@ def looks_like_tool_call_text(content: str) -> bool:
         or _RE_TOOL_CALL_TAG.search(content)
         or _RE_BRACKET_TOOL_TAG.search(content)
         or _RE_XML_TOOL_TAG.search(content)
-        or _RE_TOOL_CALL_JSON.search(content)
         or _RE_KIMI_FUNC_REF.search(content)
         or _RE_MISTRAL_TOOL.search(content)
         or _RE_QWEN_LEGACY.search(content)

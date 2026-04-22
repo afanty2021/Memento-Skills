@@ -65,10 +65,11 @@ class FeishuAdapter(BaseChannelAdapter):
 
     def __init__(
         self,
-        app_id: str,
-        app_secret: str,
+        app_id: str = "",
+        app_secret: str = "",
         encrypt_key: str = "",
         verification_token: str = "",
+        **kwargs,  # 接受额外的配置字段
     ):
         super().__init__()
         self.app_id = app_id
@@ -103,8 +104,14 @@ class FeishuAdapter(BaseChannelAdapter):
             mode.value,
         )
         # 导入 im_platform 组件
-        # 创建 Platform 实例（从配置文件读取凭证）
-        self._platform = FeishuPlatform()
+        # 创建 Platform 实例
+        # 优先使用传入的凭证，否则从配置文件读取
+        self._platform = FeishuPlatform(
+            app_id=self.app_id,
+            app_secret=self.app_secret,
+            encrypt_key=self.encrypt_key,
+            verification_token=self.verification_token,
+        )
 
         logger.info(
             "[FeishuAdapter] ✓ _do_initialize completed: app_id=%s, mode=%s",
@@ -187,7 +194,7 @@ class FeishuAdapter(BaseChannelAdapter):
             """
             try:
                 logger.info(
-                    "[FeishuAdapter] on_message called: adapter_instance=%d, msg_id=%s",
+                    "[FeishuAdapter] on_message called: adapter_instance={}, msg_id={}",
                     adapter_instance_id,
                     msg_dict.get("id", "unknown"),
                 )
@@ -195,7 +202,7 @@ class FeishuAdapter(BaseChannelAdapter):
                 # 检查是否正在停止
                 if adapter_self._stopping:
                     logger.info(
-                        "[FeishuAdapter] Message ignored (adapter stopping): msg_id=%s",
+                        "[FeishuAdapter] Message ignored (adapter stopping): msg_id={}",
                         msg_dict.get("id", "unknown"),
                     )
                     return  # 正常返回，不抛出异常，避免触发重推
@@ -205,13 +212,13 @@ class FeishuAdapter(BaseChannelAdapter):
                 saved_receiver = receiver_ref[0]
                 if saved_receiver is None:
                     logger.info(
-                        "[FeishuAdapter] Message ignored (no receiver): msg_id=%s",
+                        "[FeishuAdapter] Message ignored (no receiver): msg_id={}",
                         msg_dict.get("id", "unknown"),
                     )
                     return
                 if current_receiver is None or current_receiver is not saved_receiver:
                     logger.info(
-                        "[FeishuAdapter] Message ignored (receiver mismatch): msg_id=%s",
+                        "[FeishuAdapter] Message ignored (receiver mismatch): msg_id={}",
                         msg_dict.get("id", "unknown"),
                     )
                     return
@@ -229,7 +236,7 @@ class FeishuAdapter(BaseChannelAdapter):
 
                 current_time = time.time()
                 logger.info(
-                    "[FeishuAdapter] Message timing: msg_time=%.2f, start_time=%.2f, diff=%.2f",
+                    "[FeishuAdapter] Message timing: msg_time={:.2f}, start_time={:.2f}, diff={:.2f}",
                     msg_time, adapter_start_time,
                     current_time - msg_time if msg_time > 0 else 0
                 )
@@ -237,14 +244,14 @@ class FeishuAdapter(BaseChannelAdapter):
                 if msg_time > 0 and adapter_start_time > 0:
                     if msg_time < adapter_start_time - 5:  # 允许5秒时钟偏差
                         logger.info(
-                            "[FeishuAdapter] Message ignored (too old): msg_time=%.2f, start_time=%.2f",
+                            "[FeishuAdapter] Message ignored (too old): msg_time={:.2f}, start_time={:.2f}",
                             msg_time, adapter_start_time
                         )
                         return
 
                 gateway_msg = adapter_self._convert_to_gateway_message(msg_dict)
                 logger.info(
-                    "[FeishuAdapter] Emitting message: sender_id=%s, chat_id=%s",
+                    "[FeishuAdapter] Emitting message: sender_id={}, chat_id={}",
                     gateway_msg.sender_id,
                     gateway_msg.chat_id,
                 )
@@ -253,7 +260,7 @@ class FeishuAdapter(BaseChannelAdapter):
             except Exception as e:
                 # 记录错误但不要抛出异常，避免触发飞书的重推机制
                 logger.error(
-                    "[FeishuAdapter] Error processing message (not re-raising to avoid retry): %s",
+                    "[FeishuAdapter] Error processing message (not re-raising to avoid retry): {}",
                     e
                 )
 
@@ -271,7 +278,7 @@ class FeishuAdapter(BaseChannelAdapter):
         self._receiver.start_in_background()
 
         logger.info(
-            "[FeishuAdapter] WebSocket receiver started: app_id=%s, adapter_instance=%d, receiver_id=%d, start_time=%.2f",
+            "[FeishuAdapter] WebSocket receiver started: app_id={}, adapter_instance={}, receiver_id={}, start_time={:.2f}",
             self.app_id, adapter_instance_id, id(self._receiver), adapter_start_time
         )
 
@@ -328,7 +335,7 @@ class FeishuAdapter(BaseChannelAdapter):
             )
             return True
         except Exception as e:
-            logger.error("Edit message error: %s", e)
+            logger.error("Edit message error: {}", str(e))
             return False
 
     # ---- Webhook 支持 ----
@@ -388,7 +395,7 @@ class FeishuAdapter(BaseChannelAdapter):
             return hmac.compare_digest(computed, expected)
 
         except Exception as e:
-            logger.error("Webhook verification error: %s", e)
+            logger.error("Webhook verification error: {}", str(e))
             return False
 
     # ---- 消息转换 ----

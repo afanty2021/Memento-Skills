@@ -84,20 +84,23 @@ class SchemaMetadata:
         """合并配置，尊重 x-managed-by 标记
 
         规则：
-        1. x-managed-by: user 的字段：完全使用用户值，不合并模板默认值
-        2. 其他字段：递归合并，模板补充缺失值
+        1. x-managed-by: user 的字段：深度合并，user 覆盖 template 的默认值
+           （template 仍填充缺失字段，满足 Pydantic required 约束）
+        2. 其他字段：递归合并，template 补充缺失值，user 覆盖
         """
         import copy
-
-        # 如果当前路径是用户管理的，直接返回用户值
-        if path and SchemaMetadata.is_user_managed(schema, path):
-            return copy.deepcopy(user) if user is not None else {}
 
         # 都不是字典，返回用户值（如果是基本类型）
         if not isinstance(template, dict) or not isinstance(user, dict):
             return copy.deepcopy(user) if user is not None else copy.deepcopy(template)
 
-        # 递归合并
+        # 如果当前路径是用户管理的，深度合并（template 填充缺失，user 覆盖）
+        if path and SchemaMetadata.is_user_managed(schema, path):
+            result = copy.deepcopy(template)
+            result.update(user)
+            return result
+
+        # 递归合并（非 user-managed 字段）
         result = copy.deepcopy(user)
 
         for key, template_value in template.items():
@@ -112,7 +115,13 @@ class SchemaMetadata:
 
                 # 检查是否是用户管理字段
                 if SchemaMetadata.is_user_managed(schema, child_path):
-                    # 用户管理字段：保留用户值，不递归合并
+                    # 用户管理字段：深度合并（见上方处理）
+                    if isinstance(template_value, dict) and isinstance(user_value, dict):
+                        merged = copy.deepcopy(template_value)
+                        merged.update(user_value)
+                        result[key] = merged
+                    else:
+                        result[key] = copy.deepcopy(user_value)
                     continue
 
                 # 递归合并嵌套字典

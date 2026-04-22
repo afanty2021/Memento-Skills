@@ -18,6 +18,8 @@ class RecoveryAction(str, Enum):
     RETRY = "retry"
     AUTO_FIX = "auto_fix"
     PROMPT_USER = "prompt_user"
+    # 产物存在时的特殊动作：允许继续到下一步，不中止也不重试
+    CONTINUE = "continue"
 
 
 @dataclass(frozen=True)

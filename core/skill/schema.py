@@ -1,6 +1,9 @@
 """技能领域模型（含 Agent-Skill 契约 DTO）。
 
 所有 Skill 相关的数据模型集中定义在此文件。
+
+注意：ExecutionMode 已统一迁移到 shared/schema/skill.py，
+避免 shared/schema 与 core/skill 之间的循环依赖。
 """
 
 from __future__ import annotations
@@ -10,6 +13,9 @@ from pathlib import Path
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
+
+# ExecutionMode 从 shared.schema 导入（避免与 shared/schema/skill.py 重复定义）
+from shared.schema.skill import ExecutionMode
 
 
 # 默认 skill 参数 schema - 单个自然语言请求
@@ -26,31 +32,72 @@ DEFAULT_SKILL_PARAMS: dict[str, Any] = {
 }
 
 
-class ExecutionMode(str, Enum):
-    KNOWLEDGE = "knowledge"
-    PLAYBOOK = "playbook"
-
-
 class DiscoverStrategy(StrEnum):
     LOCAL_ONLY = "local_only"
     MULTI_RECALL = "multi_recall"
 
 
+def _doc_only_skill_root_file(filename: str) -> bool:
+    """Root files that do not imply a runnable playbook (LICENSE, README, etc.)."""
+    low = filename.lower()
+    if low == "skill.md":
+        return True
+    if low == "license" or low.startswith("license."):
+        return True
+    if low.startswith("readme"):
+        return True
+    if low.startswith("changelog"):
+        return True
+    if low.startswith("contributing"):
+        return True
+    if low.startswith("code_of_conduct"):
+        return True
+    if low in {"copying", "authors", "notice", "security.md", "maintainers.md"}:
+        return True
+    return False
+
+
+def _is_executable_file(filename: str) -> bool:
+    """判断是否为可执行/可运行的入口文件。"""
+    low = filename.lower()
+
+    # 1. 常见脚本语言后缀
+    if low.endswith(
+        (".py", ".js", ".mjs", ".ts", ".sh", ".bash", ".zsh", ".rb", ".go", ".java", ".rs", ".php", ".pl")
+    ):
+        return True
+
+    # 2. 约定俗成的入口文件名（无扩展名）
+    if low in {"run", "main", "agent", "execute", "skill", "start", "dev", "index"}:
+        return True
+
+    # 3. 带扩展名的约定入口文件
+    if low in {"index.js", "index.ts", "index.mjs", "main.js", "main.ts", "server.js", "app.js", "entry.js", "entry.ts"}:
+        return True
+
+    # 4. 项目配置文件（表明是运行时项目）
+    if low in {"package.json", "makefile", "dockerfile", "justfile"}:
+        return True
+
+    return False
+
+
 def _check_is_playbook(source_dir: str | None) -> bool:
-    """Playbook = 目录里除了 SKILL.md 还有其他文件。"""
+    """Playbook = 根目录下存在可执行/可运行文件。"""
     if not source_dir:
         return False
     d = Path(source_dir)
     if not d.is_dir():
         return False
-    for p in d.rglob("*"):
+    for p in d.iterdir():
         if not p.is_file():
             continue
         if p.name.startswith("."):
             continue
-        if p.name == "SKILL.md" and p.parent == d:
+        if _doc_only_skill_root_file(p.name):
             continue
-        return True
+        if _is_executable_file(p.name):
+            return True
     return False
 
 
@@ -87,6 +134,14 @@ class Skill(BaseModel):
     allowed_tools: list[str] = Field(
         default_factory=list,
         description="此 skill 允许使用的工具列表（按 agentskills.io 规范，实验性功能）",
+    )
+    license: Optional[str] = Field(
+        None,
+        description="许可证名称或指向 bundled LICENSE 文件的引用（agentskills.io 规范）",
+    )
+    compatibility: Optional[str] = Field(
+        None,
+        description="环境依赖说明，如所需系统包、网络访问等（agentskills.io 规范）",
     )
 
     @property
@@ -147,74 +202,3 @@ class SkillExecutionOutcome(BaseModel):
     operation_results: list[dict[str, Any]] | None = (
         None  # 已执行的 builtin tool 调用明细
     )
-
-
-# ------------------------------------------------------------------------------
-# Gateway 契约 DTO（从 gateway.py 迁移过来）
-# ------------------------------------------------------------------------------
-
-
-class SkillStatus(str, Enum):
-    """Skill 执行状态。"""
-
-    SUCCESS = "success"
-    PARTIAL = "partial"
-    FAILED = "failed"
-    BLOCKED = "blocked"
-    TIMEOUT = "timeout"
-
-
-class SkillErrorCode(str, Enum):
-    """Skill 执行错误码。"""
-
-    SKILL_NOT_FOUND = "SKILL_NOT_FOUND"
-    INVALID_INPUT = "INVALID_INPUT"
-    POLICY_DENIED = "POLICY_DENIED"
-    DEPENDENCY_MISSING = "DEPENDENCY_MISSING"
-    KEY_MISSING = "KEY_MISSING"
-    RUNTIME_ERROR = "RUNTIME_ERROR"
-    TIMEOUT = "TIMEOUT"
-    INTERNAL_ERROR = "INTERNAL_ERROR"
-
-
-class SkillGovernanceMeta(BaseModel):
-    """Skill 治理元数据。"""
-
-    source: Literal["local", "cloud"] = "local"
-
-
-class SkillExecOptions(BaseModel):
-    """Skill 执行选项。"""
-
-    workdir: str | None = None
-    timeout: int | None = None
-    env: dict[str, str] = Field(default_factory=dict)
-
-
-class SkillManifest(BaseModel):
-    """Skill 元数据 - 用于发现和注册。"""
-
-    name: str
-    description: str
-    execution_mode: ExecutionMode
-    # parameters 为 None 表示 skill 自描述，不由 manifest 强制指定
-    parameters: dict[str, Any] | None = None
-    dependencies: list[str] = Field(default_factory=list)
-    governance: SkillGovernanceMeta = Field(default_factory=SkillGovernanceMeta)
-
-
-class SkillExecutionResponse(BaseModel):
-    """Agent契约：Skill执行响应。
-
-    这是SkillGateway对外暴露的统一响应格式，由Provider层转换执行层结果后返回。
-    """
-
-    ok: bool
-    status: SkillStatus
-    error_code: SkillErrorCode | None = None
-    summary: str = ""
-    output: Any = None
-    outputs: dict[str, Any] = Field(default_factory=dict)
-    artifacts: list[str] = Field(default_factory=list)
-    diagnostics: dict[str, Any] = Field(default_factory=dict)
-    skill_name: str = ""

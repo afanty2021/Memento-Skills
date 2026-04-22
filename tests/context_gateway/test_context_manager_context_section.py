@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from core.context.manager import ContextManager
+from core.context import ContextManager
 
 
 def test_context_section_empty_state(context_manager: ContextManager):

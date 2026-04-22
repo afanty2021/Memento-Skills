@@ -63,18 +63,19 @@ class WecomAdapter(BaseChannelAdapter):
     def __init__(self, **kwargs):
         """初始化企业微信适配器。
 
-        注意：凭证参数（corp_id, agent_id, secret 等）在 kwargs 中传入，
-        但本适配器从配置文件读取凭证，因此忽略 kwargs 中的凭证参数。
+        凭证参数在 kwargs 中传入，优先使用传入的凭证，其次从配置文件读取。
         """
         super().__init__()
+
+        # 保存传入的凭证
+        self._bot_id = kwargs.get("bot_id") or kwargs.get("agent_id")  # 支持 agent_id 作为别名
+        self._bot_secret = kwargs.get("secret") or kwargs.get("bot_secret")
+        self._corp_id = kwargs.get("corp_id")
+        self._agent_id = kwargs.get("agent_id")
 
         # im_platform 组件
         self._platform: Any = None  # WecomPlatform（企业自建应用模式）
         self._receiver: Any = None  # WecomReceiver（智能机器人模式）
-
-        # 智能机器人模式凭证（bot_id + secret）
-        self._bot_id: str = ""
-        self._bot_secret: str = ""
 
         # 缓存 reply_func：key = sender_id（p2p）或 chat_id（群聊）
         # 企业微信单聊必须用 aibot_respond_msg（绑定原消息 req_id）才能回到对话上下文
@@ -106,6 +107,7 @@ class WecomAdapter(BaseChannelAdapter):
         import os
         from pathlib import Path
 
+        # 合并传入的凭证和配置文件凭证（传入的优先）
         cfg_path = Path.home() / "memento_s" / "config.json"
         try:
             with open(cfg_path, "r", encoding="utf-8") as f:
@@ -113,17 +115,40 @@ class WecomAdapter(BaseChannelAdapter):
         except Exception:
             cfg = {}
 
-        bot_id = cfg.get("bot_id") or os.environ.get("WECOM_BOT_ID", "")
-        corp_id = cfg.get("corp_id") or os.environ.get("WECOM_CORP_ID", "")
+        # 优先使用传入的凭证，其次从配置文件读取，最后回退到环境变量
+        bot_id = (
+            self._bot_id
+            if self._bot_id
+            else cfg.get("bot_id") or os.environ.get("WECOM_BOT_ID", "")
+        )
+        bot_secret = (
+            self._bot_secret
+            if self._bot_secret
+            else cfg.get("secret") or os.environ.get("WECOM_SECRET", "")
+        )
+        corp_id = (
+            self._corp_id
+            if self._corp_id
+            else cfg.get("corp_id") or os.environ.get("WECOM_CORP_ID", "")
+        )
+        agent_id = (
+            self._agent_id
+            if self._agent_id
+            else cfg.get("agent_id") or os.environ.get("WECOM_AGENT_ID", "")
+        )
 
         if bot_id:
             # 智能机器人模式：仅需 bot_id + secret，无需 WecomPlatform
             self._bot_id = bot_id
-            self._bot_secret = cfg.get("secret") or os.environ.get("WECOM_SECRET", "")
+            self._bot_secret = bot_secret
             logger.info("Wecom adapter initialized in smart robot mode (bot_id=%s)", bot_id)
         elif corp_id:
             # 企业自建应用模式
-            self._platform = WecomPlatform()
+            self._platform = WecomPlatform(
+                corp_id=corp_id,
+                agent_id=agent_id,
+                secret=bot_secret,
+            )
             logger.info("Wecom adapter initialized in enterprise app mode (corp_id=%s)", corp_id)
         else:
             raise ValueError(

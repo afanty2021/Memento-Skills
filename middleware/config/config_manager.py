@@ -28,7 +28,8 @@ from typing import Any
 import jsonschema
 from jsonschema import validate
 
-from middleware.config.config_models import GlobalConfig
+from .schemas.config_models import GlobalConfig
+from .schema_meta import SchemaMetadata
 from utils.path_manager import PathManager
 
 logger = logging.getLogger(__name__)
@@ -116,57 +117,43 @@ class ConfigManager:
     def get_builtin_skills_path(self) -> Path:
         """返回内置 skills 目录路径。
 
-        处理源码和打包两种环境：
-        - 源码: 项目根目录 / builtin/skills
-        - 打包: 使用 importlib.resources 或 PyInstaller 资源
+        根据运行时模式选择策略：
+        - DEV: 从源码项目根向上查找 builtin/skills
+        - PRODUCTION: 从 _MEIPASS 或可执行文件所在目录查找
         """
-        from importlib import resources
-        import sys
+        from utils.runtime_mode import get_runtime_mode, RuntimeMode
 
-        # Strategy 1: 源码环境 - 从当前目录向上查找 marker 文件
+        mode = get_runtime_mode()
+
+        if mode == RuntimeMode.PRODUCTION:
+            # PRODUCTION: 从 _MEIPASS 或可执行文件所在目录查找
+            import sys
+
+            meipass = getattr(sys, "_MEIPASS", None)
+            if meipass:
+                builtin_path = Path(meipass) / "builtin" / "skills"
+                if builtin_path.exists():
+                    return builtin_path
+            # 兜底：从可执行文件所在目录查找
+            if sys.executable:
+                builtin_path = Path(sys.executable).parent / "builtin" / "skills"
+                if builtin_path.exists():
+                    return builtin_path
+
+        # DEV: 从源码项目根向上查找
+        # 依次向上查找包含 marker 文件的目录作为项目根
         marker_files = ["pyproject.toml", ".git", "bootstrap.py"]
-        current_dir = Path.cwd()
-        for parent in [current_dir] + list(current_dir.parents):
+        current_file = Path(__file__).resolve()
+        for parent in current_file.parents:
             if any((parent / marker).exists() for marker in marker_files):
                 builtin_path = parent / "builtin" / "skills"
                 if builtin_path.exists():
                     return builtin_path
 
-        # Strategy 2: 打包应用 - 使用 importlib.resources
-        try:
-            # 尝试访问包资源
-            builtin_ref = resources.files("memento_s") / "builtin" / "skills"
-            if builtin_ref.is_dir():
-                return Path(str(builtin_ref))
-        except (ImportError, TypeError, AttributeError):
-            pass
-
-        # Strategy 3: PyInstaller 打包
-        if getattr(sys, "frozen", False):
-            # PyInstaller 单文件模式
-            if hasattr(sys, "_MEIPASS"):
-                builtin_path = Path(sys._MEIPASS) / "builtin" / "skills"
-                if builtin_path.exists():
-                    return builtin_path
-
-            # PyInstaller 单目录模式或其他打包工具
-            if sys.executable:
-                bundle_dir = Path(sys.executable).parent
-                builtin_path = bundle_dir / "builtin" / "skills"
-                if builtin_path.exists():
-                    return builtin_path
-
-        # Strategy 4: 从当前文件位置向上查找
-        current_file = Path(__file__).resolve()
-        for parent in current_file.parents:
-            candidate = parent / "builtin" / "skills"
-            if candidate.exists():
-                return candidate
-
         raise RuntimeError(
             "无法找到 builtin/skills 目录。"
-            "源码环境: 期望在项目根目录下。"
-            "打包环境: 期望作为 memento_s.builtin.skills 资源。"
+            "DEV 模式: 期望在项目根目录下。"
+            "PRODUCTION 模式: 期望在打包资源中。"
         )
 
     def get_db_path(self) -> Path:
@@ -282,7 +269,7 @@ class ConfigManager:
             self._user_data = self._load_user_config()
 
             # 4. 合并为运行时配置（User 覆盖 System）
-            self._runtime_data = self._deep_merge(self._system_data, self._user_data)
+            self._runtime_data = self._merge(self._system_data, self._user_data)
 
             # 5. 补全路径配置（从 PathManager 获取实际路径）
             # 注意：强制覆盖，确保使用 PathManager 的实际路径
@@ -345,7 +332,7 @@ class ConfigManager:
         self._set_by_path(self._user_data, key_path, value)
 
         # 重新合并（User 覆盖 System）
-        self._runtime_data = self._deep_merge(self._system_data, self._user_data)
+        self._runtime_data = self._merge(self._system_data, self._user_data)
 
         # 重新补全路径配置（从 PathManager 获取实际路径）
         # 注意：强制覆盖，确保使用 PathManager 的实际路径
@@ -443,8 +430,12 @@ class ConfigManager:
         if not self._system_data:
             self._system_data = self.load_system_config()
 
-        # 1. 从传入的配置中提取用户字段
-        filtered_user_data = self._filter_user_config(user_config)
+        # 1. 用 _is_system_readonly 过滤，只保留用户可写的字段
+        filtered_user_data: dict[str, Any] = {}
+        for key, value in user_config.items():
+            if self._is_system_readonly(key):
+                continue
+            filtered_user_data[key] = copy.deepcopy(value)
 
         # 2. 验证提取的用户配置（使用 user schema）
         self._validate_user_config(filtered_user_data)
@@ -453,8 +444,7 @@ class ConfigManager:
         self._user_data = filtered_user_data
 
         # 4. 使用 System + User 合并更新运行时
-        # 注意：运行时配置 = 系统配置 + 用户配置覆盖
-        self._runtime_data = self._deep_merge(self._system_data, self._user_data)
+        self._runtime_data = self._merge(self._system_data, self._user_data)
 
         # 5. 补全路径配置
         self._runtime_data["paths"] = {
@@ -496,49 +486,14 @@ class ConfigManager:
 
     # ========== 内部方法 ==========
 
-    def _filter_user_config(self, config: dict[str, Any]) -> dict[str, Any]:
-        """过滤用户配置，只保留允许的字段。
+    def _merge(self, system: dict, user: dict) -> dict:
+        """统一的 merge 策略：SchemaMetadata 驱动。
 
-        基于 user_config_schema.json 的字段定义。
+        规则：
+        - x-managed-by: user 的字段 → 直接用 user 值（不递归合并模板）
+        - 其他字段 → 递归合并，system 为基础，user 覆盖
 
-        Args:
-            config: 原始配置字典
-
-        Returns:
-            过滤后的配置字典
-        """
-        # 允许的用户配置顶层字段
-        allowed_top_level = {"version", "app", "llm", "env", "im", "gateway"}
-
-        filtered = {}
-        for key, value in config.items():
-            if key in allowed_top_level:
-                if key == "app":
-                    # app 只允许 theme 和 language
-                    filtered[key] = {
-                        k: v for k, v in value.items() if k in ("theme", "language")
-                    }
-                elif key == "gateway":
-                    # gateway 允许用户配置的字段
-                    allowed_gateway_fields = {
-                        "enabled",
-                        "mode",
-                        "websocket_host",
-                        "websocket_port",
-                        "webhook_host",
-                        "webhook_port",
-                    }
-                    filtered[key] = {
-                        k: v for k, v in value.items() if k in allowed_gateway_fields
-                    }
-                else:
-                    # 其他字段完全保留
-                    filtered[key] = copy.deepcopy(value)
-
-        return filtered
-
-    def _deep_merge(self, system: dict, user: dict) -> dict:
-        """深度合并：System 为基础，User 覆盖。
+        用于 load()、set()、replace_user_config()。
 
         Args:
             system: 系统配置（基础）
@@ -547,52 +502,24 @@ class ConfigManager:
         Returns:
             合并后的配置
         """
-        result = copy.deepcopy(system)
-
-        for key, user_value in user.items():
-            if (
-                key in result
-                and isinstance(result[key], dict)
-                and isinstance(user_value, dict)
-            ):
-                # 递归合并嵌套字典
-                result[key] = self._deep_merge(result[key], user_value)
-            else:
-                # User 值覆盖 System 值（包括删除 System 默认值的情况）
-                result[key] = copy.deepcopy(user_value)
-
-        return result
+        schema = self.load_schema()
+        return SchemaMetadata.merge_respecting_metadata(system, user, schema)
 
     def _is_system_readonly(self, key_path: str) -> bool:
         """检查字段是否是系统只读。
 
-        通过检查 key_path 在 system_data 中是否存在且 user 未覆盖。
+        通过 schema metadata 的 x-managed-by 判断。
+        - 如果 key_path 未在 schema 中标记为 x-managed-by: user，则系统只读
+        - 支持嵌套路径（如 gateway.mode）
 
         Args:
-            key_path: 配置路径，如 "ota.url" 或 "skills.catalog_path"
+            key_path: 配置路径，如 "llm.active_profile" 或 "gateway.mode"
 
         Returns:
             True 如果是系统只读字段
         """
-        # 获取当前值（从 runtime）
-        current_value = self._get_by_path(self._runtime_data, key_path, None)
-
-        # 获取 system 中的值
-        system_value = self._get_by_path(self._system_data, key_path, None)
-
-        # 获取 user 中的值
-        user_value = self._get_by_path(self._user_data, key_path, None)
-
-        # 如果 user 已经设置了这个值，允许修改
-        if user_value is not None:
-            return False
-
-        # 如果 system 有这个值，且 user 没有覆盖，则是系统字段
-        if system_value is not None:
-            return True
-
-        # 都不存在，允许修改（新增字段）
-        return False
+        schema = self.load_schema()
+        return not SchemaMetadata.is_user_managed(schema, key_path)
 
     def _load_user_config(self) -> dict[str, Any]:
         """从磁盘加载用户配置。"""

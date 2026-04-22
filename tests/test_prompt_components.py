@@ -16,17 +16,19 @@ from unittest.mock import MagicMock, patch, PropertyMock
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from core.skill.schema import Skill, ExecutionMode
-from core.skill.gateway import (
-    SkillGateway,
-    SkillManifest,
-    SkillGovernanceMeta,
-    DEFAULT_SKILL_PARAMS,
-)
+from core.skill.schema import Skill
+from shared.schema import ExecutionMode, SkillGovernanceMeta, SkillManifest
 
 from core.skill.retrieval.multi_recall import MultiRecall
-from core.context import ContextManager
-from core.memento_s.schemas import AgentConfig
+from core.context import ContextManager, SessionContext
+from core.memento_s.schemas import AgentRuntimeConfig as AgentConfig
+
+import tempfile
+
+_test_session_ctx = SessionContext.create(
+    "test-prompt-components",
+    base_dir=Path(tempfile.gettempdir()) / "memento_s_test",
+)
 
 
 # ── 全局 mock g_config ──────────────────────────────────────────
@@ -181,7 +183,7 @@ async def test_skills_summary_in_system_prompt():
         patch("core.skill.provider.g_config", _mock_config),
     ):
         ctx_mgr = ContextManager(
-            session_id="test",
+            ctx=_test_session_ctx,
             config=AgentConfig(),
             skill_gateway=provider,
         )
@@ -206,7 +208,7 @@ async def test_full_system_prompt_structure():
         patch("core.skill.provider.g_config", _mock_config),
     ):
         ctx_mgr = ContextManager(
-            session_id="test",
+            ctx=_test_session_ctx,
             config=AgentConfig(),
             skill_gateway=provider,
         )
@@ -250,7 +252,7 @@ async def test_direct_mode_no_skills():
         patch("core.skill.provider.g_config", _mock_config),
     ):
         ctx_mgr = ContextManager(
-            session_id="test",
+            ctx=_test_session_ctx,
             config=AgentConfig(),
             skill_gateway=provider,
         )
@@ -284,7 +286,7 @@ async def test_with_real_builtin_skills():
         patch("core.skill.provider.g_config", _mock_config),
     ):
         ctx_mgr = ContextManager(
-            session_id="test",
+            ctx=_test_session_ctx,
             config=AgentConfig(),
             skill_gateway=provider,
         )
@@ -318,8 +320,13 @@ async def test_search_skill_no_local_duplication():
     """验证 search_skill 不再返回本地 skills，只返回云端新增"""
     print("\n【8. search_skill 不再返回本地 skills（去重验证）】")
 
-    from core.memento_s.tool_dispatcher import ToolDispatcher
-    from core.memento_s.policies import PolicyManager
+    from core.memento_s.skill_dispatch import SkillDispatcher
+    from core.context.session_context import SessionContext
+
+    _test_dispatcher_ctx = SessionContext.create(
+        "test-dispatcher",
+        base_dir=Path(tempfile.gettempdir()) / "memento_s_test",
+    )
 
     real_skills = _load_real_builtin_skills()
     if real_skills is None:
@@ -328,12 +335,10 @@ async def test_search_skill_no_local_duplication():
 
     provider = _build_provider(real_skills)
 
-    dispatcher = ToolDispatcher(
-        policy_manager=PolicyManager(),
+    dispatcher = SkillDispatcher(
         skill_gateway=provider,
-        session_id="test_dedup",
     )
-    dispatcher.set_session_id("test_dedup")
+    dispatcher.set_context(_test_dispatcher_ctx)
 
     with patch("core.skill.provider.g_config", _mock_config):
         search_result = await dispatcher.execute(
@@ -378,18 +383,16 @@ async def test_execute_skill_direct_local():
     """验证本地 skill 可以不经 search_skill 直接 execute_skill"""
     print("\n【9. execute_skill 直接调用本地 skill（无需先 search）】")
 
-    from core.memento_s.tool_dispatcher import ToolDispatcher
-    from core.memento_s.policies import PolicyManager
+    from core.memento_s.skill_dispatch import SkillDispatcher
+from core.context.session_context import SessionContext
 
     skills = _make_fake_skills()
     provider = _build_provider(skills)
 
-    dispatcher = ToolDispatcher(
-        policy_manager=PolicyManager(),
+    dispatcher = SkillDispatcher(
         skill_gateway=provider,
-        session_id="test_direct",
     )
-    dispatcher.set_session_id("test_direct")
+    dispatcher.set_context(_test_dispatcher_ctx)
 
     # 不调 search_skill，直接 execute_skill 本地 skill
     with patch("core.skill.provider.g_config", _mock_config):
@@ -414,18 +417,16 @@ async def test_execute_skill_cloud_requires_search():
     """验证云端（未知）skill 仍然要求先 search_skill"""
     print("\n【10. execute_skill 未知 skill 仍要求先 search】")
 
-    from core.memento_s.tool_dispatcher import ToolDispatcher
-    from core.memento_s.policies import PolicyManager
+    from core.memento_s.skill_dispatch import SkillDispatcher
+from core.context.session_context import SessionContext
 
     skills = _make_fake_skills()
     provider = _build_provider(skills)
 
-    dispatcher = ToolDispatcher(
-        policy_manager=PolicyManager(),
+    dispatcher = SkillDispatcher(
         skill_gateway=provider,
-        session_id="test_guard",
     )
-    dispatcher.set_session_id("test_guard")
+    dispatcher.set_context(_test_dispatcher_ctx)
 
     with patch("core.skill.provider.g_config", _mock_config):
         result = await dispatcher.execute(
@@ -447,8 +448,8 @@ async def test_end_to_end_messages():
     """端到端：验证优化后 LLM 看到的 messages 不再有本地 skill 重复"""
     print("\n【11. 端到端：优化后完整 messages 验证】")
 
-    from core.memento_s.tool_dispatcher import ToolDispatcher
-    from core.memento_s.policies import PolicyManager
+    from core.memento_s.skill_dispatch import SkillDispatcher
+from core.context.session_context import SessionContext
 
     real_skills = _load_real_builtin_skills()
     if real_skills is None:
@@ -462,18 +463,16 @@ async def test_end_to_end_messages():
         patch("core.skill.provider.g_config", _mock_config),
     ):
         ctx_mgr = ContextManager(
-            session_id="test",
+            ctx=_test_session_ctx,
             config=AgentConfig(),
             skill_gateway=provider,
         )
         system_prompt = await ctx_mgr.assemble_system_prompt(mode="agentic")
 
-    dispatcher = ToolDispatcher(
-        policy_manager=PolicyManager(),
+    dispatcher = SkillDispatcher(
         skill_gateway=provider,
-        session_id="test_e2e",
     )
-    dispatcher.set_session_id("test_e2e")
+    dispatcher.set_context(_test_dispatcher_ctx)
 
     with patch("core.skill.provider.g_config", _mock_config):
         search_result = await dispatcher.execute(

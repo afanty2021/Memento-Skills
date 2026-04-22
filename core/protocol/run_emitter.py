@@ -15,6 +15,35 @@ from .events import new_run_id
 from .types import AgentFinishReason, PhaseSignalType, StepStatus
 
 
+def _normalize_usage(usage: Any) -> dict[str, Any] | None:
+    """Convert provider-specific usage payloads into plain dicts."""
+    if usage is None:
+        return None
+    if isinstance(usage, dict):
+        return usage
+    if hasattr(usage, "model_dump"):
+        return usage.model_dump()
+    if hasattr(usage, "dict"):
+        return usage.dict()
+    try:
+        return dict(usage)
+    except Exception:
+        pass
+
+    normalized: dict[str, Any] = {}
+    for field in (
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "input_tokens",
+        "output_tokens",
+    ):
+        value = getattr(usage, field, None)
+        if value is not None:
+            normalized[field] = value
+    return normalized or {"value": str(usage)}
+
+
 class RunEmitter:
     """Protocol-agnostic event emitter bound to a single run.
 
@@ -53,14 +82,33 @@ class RunEmitter:
         payload: dict[str, Any] = {
             "outputText": output_text,
             "reason": reason.value,
-            "usage": usage,
+            "usage": _normalize_usage(usage),
         }
         if context_tokens is not None:
             payload["contextTokens"] = context_tokens
         return self._emit(PhaseSignalType.RUN_FINISHED, **payload)
 
-    def run_error(self, *, message: str) -> dict[str, Any]:
-        return self._emit(PhaseSignalType.RUN_ERROR, message=message)
+    def run_cancelled(self) -> dict[str, Any]:
+        return self._emit(
+            PhaseSignalType.RUN_FINISHED,
+            outputText="",
+            reason=AgentFinishReason.CANCELLED.value,
+            usage=None,
+        )
+
+    def run_error(
+        self,
+        *,
+        message: str,
+        reason: AgentFinishReason | None = None,
+        context_tokens: int | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"message": message}
+        if reason is not None:
+            payload["reason"] = reason.value
+        if context_tokens is not None:
+            payload["contextTokens"] = context_tokens
+        return self._emit(PhaseSignalType.RUN_ERROR, **payload)
 
     # ── Intent ──────────────────────────────────────────────────────
 

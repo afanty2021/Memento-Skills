@@ -5,11 +5,12 @@ from __future__ import annotations
 import importlib.metadata
 import importlib.util
 import os
+import re
 import shutil
 from pathlib import Path
 from typing import Any
 
-from core.shared.dependency_aliases import (
+from shared.tools.dependency_aliases import (
     normalize_dependency_name,
     normalize_dependency_spec,
     strip_version_extras,
@@ -21,6 +22,25 @@ from core.skill.schema import Skill
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+# ---------------------------------------------------------------------------
+# Sensitive key pattern matching (cross-platform, regex-based)
+# ---------------------------------------------------------------------------
+
+_SENSITIVE_KEY_PATTERNS: list[re.Pattern[str]] = [
+    # Generic patterns
+    re.compile(r"(KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL|PRIVATE)[_A-Z0-9]*", re.IGNORECASE),
+    # Provider-specific prefixes
+    re.compile(r"^(ANTHROPIC|OPENAI|AWS|AZURE|HUGGINGFACE|GOOGLE|STRIPE|SLACK|GITHUB|GITLAB|JIRA|DOCKER|HEROKU|DATADOG|NEWRELIC|SENTRY|STRIPE)[_A-Z]*", re.IGNORECASE),
+    # Common key suffixes
+    re.compile(r"[_](KEY|SECRET|TOKEN|PASSWORD|PRIVATE)$", re.IGNORECASE),
+]
+
+
+def _is_sensitive_key(key: str) -> bool:
+    """Check if an environment variable name looks like a sensitive credential."""
+    return any(pat.fullmatch(key) for pat in _SENSITIVE_KEY_PATTERNS)
+
 
 def _deny(reason: str, detail: dict[str, Any] | None = None) -> PolicyDecision:
     return PolicyDecision(
@@ -44,14 +64,19 @@ def _get_available_keys() -> set[str]:
 
     try:
         for key, value in get_config_env_vars().items():
-            if value and "KEY" in key.upper():
-                keys.add(key.upper())
+            if value:
+                upper_key = key.upper()
+                # Only include keys that look sensitive
+                if _is_sensitive_key(upper_key):
+                    keys.add(upper_key)
     except Exception:
         pass
 
     for key, value in os.environ.items():
-        if "KEY" in key.upper() and value:
-            keys.add(key.upper())
+        if value:
+            upper_key = key.upper()
+            if _is_sensitive_key(upper_key) and upper_key not in keys:
+                keys.add(upper_key)
 
     return keys
 
@@ -143,15 +168,16 @@ def check_allowed_tools(skill: Skill) -> PolicyDecision:
         return _allow()
 
     try:
-        from core.shared.tools_facade import BUILTIN_TOOL_SCHEMAS
+        from shared.tools import get_tool_schemas
 
+        schemas = get_tool_schemas()
         available = {
             t.get("function", {}).get("name", "")
-            for t in BUILTIN_TOOL_SCHEMAS
+            for t in schemas
             if isinstance(t, dict)
         }
     except Exception as e:
-        logger.warning("Failed to inspect BUILTIN_TOOL_SCHEMAS: {}", e)
+        logger.warning("Failed to inspect tool schemas: {}", e)
         return _allow()
 
     invalid = sorted({tool for tool in skill.allowed_tools if tool not in available})
@@ -164,7 +190,7 @@ def check_allowed_tools(skill: Skill) -> PolicyDecision:
             "error_type": "input_invalid",
             "category": "allowed_tools",
             "retryable": False,
-            "hint": "Fix skill metadata allowed_tools to match builtin tool names.",
+            "hint": "Fix skill metadata allowed_tools to match tool names.",
             "invalid_tools": invalid,
         },
     )

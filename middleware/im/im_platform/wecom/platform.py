@@ -64,15 +64,43 @@ class WecomPlatform:
 
     优先从 ~/memento_s/config.json 的 im.wecom 节读取配置，
     缺失时回退到同名环境变量（WECOM_CORP_ID / WECOM_SECRET / WECOM_AGENT_ID / WECOM_WEBHOOK_URL）。
+
+    也支持直接传入凭证参数（优先使用传入的值）。
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        corp_id: str | None = None,
+        agent_id: str | None = None,
+        secret: str | None = None,
+        webhook_url: str | None = None,
+    ) -> None:
         cfg = _load_wecom_config()
-        self._corp_id = cfg.get("corp_id") or os.environ.get("WECOM_CORP_ID", "")
-        self._secret = cfg.get("secret") or os.environ.get("WECOM_SECRET", "")
-        self._agent_id = cfg.get("agent_id") or os.environ.get("WECOM_AGENT_ID", "")
-        self._webhook_url = cfg.get("webhook_url") or os.environ.get("WECOM_WEBHOOK_URL", "")
-        self._base_url = (cfg.get("base_url") or os.environ.get("WECOM_BASE_URL", DEFAULT_BASE_URL)).rstrip("/")
+
+        # 优先使用传入的参数，其次从配置文件读取，最后回退到环境变量
+        self._corp_id = (
+            corp_id
+            if corp_id is not None
+            else cfg.get("corp_id") or os.environ.get("WECOM_CORP_ID", "")
+        )
+        self._secret = (
+            secret
+            if secret is not None
+            else cfg.get("secret") or os.environ.get("WECOM_SECRET", "")
+        )
+        self._agent_id = (
+            agent_id
+            if agent_id is not None
+            else cfg.get("agent_id") or os.environ.get("WECOM_AGENT_ID", "")
+        )
+        self._webhook_url = (
+            webhook_url
+            if webhook_url is not None
+            else cfg.get("webhook_url") or os.environ.get("WECOM_WEBHOOK_URL", "")
+        )
+        self._base_url = (
+            cfg.get("base_url") or os.environ.get("WECOM_BASE_URL", DEFAULT_BASE_URL)
+        ).rstrip("/")
 
         self._use_webhook_only = bool(self._webhook_url and not (self._corp_id and self._secret))
 

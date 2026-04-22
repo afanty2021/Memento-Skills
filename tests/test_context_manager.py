@@ -26,15 +26,16 @@ sys.path.insert(0, str(project_root))
 
 from middleware.llm.utils import looks_like_tool_call_text
 from utils.token_utils import count_tokens_messages
-from core.context.schemas import ContextConfig
-from core.memento_s.schemas import AgentConfig
+from core.context.config import ContextManagerConfig
+from core.context.session_context import SessionContext
+from core.memento_s.schemas import AgentRuntimeConfig as AgentConfig
 
 
 # ── Fixtures ────────────────────────────────────────────────────────
 
 
-def _make_ctx_cfg(**overrides) -> ContextConfig:
-    return ContextConfig(**overrides)
+def _make_ctx_cfg(**overrides) -> ContextManagerConfig:
+    return ContextManagerConfig(**overrides)
 
 
 def _make_tool_result_json(ok: bool = True, summary: str = "done") -> str:
@@ -55,13 +56,14 @@ def _make_tool_result_json(ok: bool = True, summary: str = "done") -> str:
 
 
 def _create_context_manager(tmp_dir: Path, session_id: str = "test-session"):
-    from core.context.manager import ContextManager
+    from core.context import ContextManager
 
     mock_g_config = MagicMock()
     mock_g_config.paths.context_dir = tmp_dir / "context"
-    with patch("core.context.manager.g_config", mock_g_config):
+    with patch("core.context.context_manager.g_config", mock_g_config):
+        ctx = SessionContext.create(session_id, base_dir=tmp_dir / "context")
         return ContextManager(
-            session_id=session_id, config=_make_ctx_cfg(),
+            ctx=ctx, config=_make_ctx_cfg(),
         )
 
 
@@ -299,7 +301,7 @@ def test_get_context_section_with_scratchpad():
 
 
 def test_context_config_defaults():
-    cfg = ContextConfig()
+    cfg = ContextManagerConfig()
     assert cfg.compaction_trigger_ratio == 0.7
     assert cfg.compress_threshold_ratio == 0.5
     assert cfg.summary_ratio == 0.15
@@ -307,7 +309,7 @@ def test_context_config_defaults():
 
 def test_agent_config_has_context():
     cfg = AgentConfig()
-    assert isinstance(cfg.context, ContextConfig)
+    assert isinstance(cfg.context, ContextManagerConfig)
     assert cfg.context.compaction_trigger_ratio == 0.7
 
 

@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from core.memento_s.tool_dispatcher import ToolDispatcher
+from core.memento_s.skill_dispatch import SkillDispatcher
 from core.memento_s.tool_schemas import AGENT_TOOL_SCHEMAS
 
 
@@ -14,7 +14,7 @@ def test_agent_tool_schemas_only_search_and_execute():
 
 
 @pytest.mark.asyncio
-async def test_search_skill_missing_query_real_gateway(real_dispatcher: ToolDispatcher):
+async def test_search_skill_missing_query_real_gateway(real_dispatcher: SkillDispatcher):
     raw = await real_dispatcher.execute("search_skill", {})
     payload = json.loads(raw)
 
@@ -24,7 +24,7 @@ async def test_search_skill_missing_query_real_gateway(real_dispatcher: ToolDisp
 
 
 @pytest.mark.asyncio
-async def test_search_skill_success_real_gateway(real_dispatcher: ToolDispatcher):
+async def test_search_skill_success_real_gateway(real_dispatcher: SkillDispatcher):
     raw = await real_dispatcher.execute(
         "search_skill",
         {"query": "web search", "k": 5},

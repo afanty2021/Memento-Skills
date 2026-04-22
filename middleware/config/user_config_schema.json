@@ -9,6 +9,7 @@
     "$schema": { "type": "string" },
     "app": {
       "type": "object",
+      "x-managed-by": "user",
       "required": ["theme", "language"],
       "properties": {
         "theme": { "type": "string" },
@@ -30,7 +31,66 @@
     },
     "env": {
       "type": "object",
+      "x-managed-by": "user",
       "additionalProperties": { "type": ["string", "null"] }
+    },
+    "gateway": {
+      "type": "object",
+      "x-managed-by": "user",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "mode": { "type": "string" },
+        "websocket_host": { "type": "string" },
+        "websocket_port": { "type": "integer" },
+        "webhook_host": { "type": "string" },
+        "webhook_port": { "type": "integer" }
+      }
+    },
+    "im": {
+      "type": "object",
+      "x-managed-by": "user",
+      "properties": {
+        "platform": { "type": "string" },
+        "feishu": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "app_id": { "type": ["string", "null"] },
+            "app_secret": { "type": ["string", "null"] }
+          }
+        },
+        "dingtalk": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "app_key": { "type": ["string", "null"] },
+            "app_secret": { "type": ["string", "null"] }
+          }
+        },
+        "wecom": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" }
+          }
+        },
+        "wechat": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "ota": {
+      "type": "object",
+      "description": "OTA update preferences (url is system-managed and not user-configurable)",
+      "properties": {
+        "auto_check": { "type": "boolean" },
+        "auto_download": { "type": "boolean" },
+        "check_interval_hours": { "type": "integer", "minimum": 0 },
+        "install_confirmation": { "type": "boolean" }
+      },
+      "additionalProperties": false
     }
   },
   "definitions": {

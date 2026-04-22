@@ -5,7 +5,7 @@ Usage:
   python scripts/verify_web_search_chain.py "your query"
 
 This executes the web-search skill through SkillGateway, which should
-produce ops and invoke builtin/tools/web.py (tavily_search_tool or fetch_webpage_tool).
+produce ops and invoke tools/atomics/web.py (search_web or fetch_webpage).
 Check the application logs to verify the tool calls.
 """
 
@@ -15,9 +15,9 @@ import asyncio
 import sys
 
 from core.skill.gateway import SkillGateway
-from core.skill.config import SkillConfig
+from shared.schema import SkillConfig
 from middleware.config import g_config
-from builtin.tools.bash import bash_tool
+from tools.atomics.bash import bash
 from core.skill.execution.sandbox import get_sandbox
 
 
@@ -36,13 +36,13 @@ async def main() -> int:
         result = await provider.execute("web-search", params={"request": query})
 
         command = "python -c \"print('sandbox_ok')\""
-        bash_result = await bash_tool(command)
+        bash_result = await bash(command)
 
         sandbox = get_sandbox()
         sandbox.install_python_deps(["httpx"], timeout=120)
 
         httpx_command = "python -c \"import httpx; print('httpx_ok')\""
-        httpx_result = await bash_tool(httpx_command)
+        httpx_result = await bash(httpx_command)
     finally:
         pass  # Provider 不需要显式关闭
 

@@ -10,8 +10,13 @@ Does NOT: execute new actions, modify the plan.
 
 from __future__ import annotations
 
-from typing import Any, AsyncGenerator
+import re
+from typing import TYPE_CHECKING, Any, AsyncGenerator
 
+if TYPE_CHECKING:
+    from .phases.state import AgentRunState
+
+from core.context import ContextManager
 from core.protocol import AgentFinishReason, RunEmitter, StepStatus
 from middleware.llm import LLMClient
 from middleware.llm.utils import (
@@ -23,6 +28,10 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+
+# 流式前缀剥离：缓冲足够字符后再检测，避免 chunk 分割导致漏过
+_FINAL_ANSWER_PREFIX_RE = re.compile(r'^[\s\n]*Final Answer\s*[\uff1a:]\s*', re.IGNORECASE)
+_PREFIX_BUF_SIZE = 32  # "Final Answer:" 13 chars，留余量
 
 EMPTY_REPLY_FALLBACK = (
     "（模型未返回有效内容，请重试或换个方式提问。）\n"
@@ -39,7 +48,7 @@ _FINALIZE_RETRY_INSTRUCTION = (
 )
 
 
-def to_enriched_summary(session_ctx: Any, state: Any = None) -> str:
+def to_enriched_summary(session_ctx: ContextManager, state: Any = None) -> str:
     """Generate an enriched session summary including plan completion and skills used.
 
     Falls back to ``session_ctx.to_summary()`` if state is unavailable.
@@ -56,14 +65,14 @@ def to_enriched_summary(session_ctx: Any, state: Any = None) -> str:
         done = sum(1 for s in statuses if str(s) == "done")
         total = len(task_plan.steps)
         extra_parts.append(f"Plan: {done}/{total} steps completed")
-
-    action_history = getattr(session_ctx, "action_history", [])
-    skill_names = sorted({
-        r.skill_name for r in action_history
-        if getattr(r, "skill_name", "")
-    })
-    if skill_names:
-        extra_parts.append(f"Skills: {', '.join(skill_names[:8])}")
+        # 从已完成的 steps 中提取 skill 名称
+        done_skills = [
+            s.skill_name for i, s in enumerate(task_plan.steps)
+            if i < len(statuses) and str(statuses[i]) == "done"
+            and getattr(s, "skill_name", None)
+        ]
+        if done_skills:
+            extra_parts.append(f"Skills: {', '.join(sorted(set(done_skills))[:8])}")
 
     if extra_parts:
         return f"{base} | {' | '.join(extra_parts)}" if base else " | ".join(extra_parts)
@@ -100,9 +109,9 @@ async def stream_and_finalize(
     emitter: RunEmitter,
     step: int,
     step_usage: dict[str, Any] | None = None,
-    session_ctx: Any = None,
+    session_ctx: ContextManager | None = None,
     context_tokens: int | None = None,
-    state: Any = None,
+    state: AgentRunState | None = None,
     result_info: dict[str, Any] | None = None,
 ) -> AsyncGenerator[dict[str, Any], None]:
     """Stream an LLM response and emit STEP_FINISHED + TEXT_MESSAGE + RUN_FINISHED.
@@ -118,6 +127,9 @@ async def stream_and_finalize(
     clean_parts: list[str] = []
     full_text = ""
     got_tool_calls = False
+    # 前缀缓冲：累积足够字符后统一检测并剥离 "Final Answer:"
+    _prefix_buf = ""
+    _prefix_done = False
     try:
         async for chunk in llm.async_stream_chat(messages=messages, tools=tools):
             if chunk.usage:
@@ -127,25 +139,43 @@ async def stream_and_finalize(
             if chunk.delta_content:
                 text_parts.append(chunk.delta_content)
                 cleaned_delta = sanitize_content(chunk.delta_content)
-                if cleaned_delta:
-                    clean_parts.append(cleaned_delta)
-                    yield emitter.text_delta(message_id=msg_id, delta=cleaned_delta)
+                if not _prefix_done:
+                    _prefix_buf += cleaned_delta
+                    if len(_prefix_buf) >= _PREFIX_BUF_SIZE:
+                        _prefix_buf = _FINAL_ANSWER_PREFIX_RE.sub("", _prefix_buf)
+                        _prefix_done = True
+                        if _prefix_buf:
+                            clean_parts.append(_prefix_buf)
+                            yield emitter.text_delta(message_id=msg_id, delta=_prefix_buf)
+                        _prefix_buf = ""
+                else:
+                    if cleaned_delta:
+                        clean_parts.append(cleaned_delta)
+                        yield emitter.text_delta(message_id=msg_id, delta=cleaned_delta)
+
+        # 流结束时若缓冲区未满，仍需剥离前缀后 emit
+        if not _prefix_done and _prefix_buf:
+            _prefix_buf = _FINAL_ANSWER_PREFIX_RE.sub("", _prefix_buf)
+            if _prefix_buf:
+                clean_parts.append(_prefix_buf)
+                yield emitter.text_delta(message_id=msg_id, delta=_prefix_buf)
 
         if got_tool_calls:
+            discarded_len = len("".join(clean_parts))
             logger.warning(
-                "Finalize: got_tool_calls=True, discarding {} streamed text parts "
-                "as likely raw tool token contamination",
+                "Finalize: got_tool_calls=True, discarding %d streamed text parts "
+                "(~%d chars) as likely raw tool token contamination",
                 len(clean_parts),
+                discarded_len,
             )
             clean_parts.clear()
             text_parts.clear()
             if result_info is not None:
                 result_info["got_tool_calls"] = True
+                result_info["discarded_content_length"] = discarded_len
 
         clean_streamed = "".join(clean_parts).strip()
         if clean_streamed:
-            if clean_streamed.startswith("Final Answer:"):
-                clean_streamed = clean_streamed.removeprefix("Final Answer:").lstrip()
             if looks_like_tool_call_text(clean_streamed):
                 logger.warning(
                     "Finalize: clean_streamed still has raw tool tokens after per-chunk sanitize, re-sanitizing"
@@ -156,8 +186,7 @@ async def stream_and_finalize(
             raw_text = "".join(text_parts).strip()
             if raw_text:
                 logger.warning("Finalize: clean_parts empty but text_parts has content, sanitizing raw")
-                if raw_text.startswith("Final Answer:"):
-                    raw_text = raw_text.removeprefix("Final Answer:").lstrip()
+                raw_text = _FINAL_ANSWER_PREFIX_RE.sub("", raw_text)
                 full_text = sanitize_content(raw_text).strip()
             else:
                 full_text = ""
@@ -195,8 +224,8 @@ async def stream_and_finalize(
 
 
 async def persist_session_summary(
-    session_ctx: Any,
-    state: Any = None,
+    session_ctx: ContextManager | None,
+    state: AgentRunState | None = None,
 ) -> None:
     """Best-effort session summary persistence with enriched data."""
     if not session_ctx:

@@ -110,7 +110,7 @@ class ConnectionPool:
             self._by_channel[info.config.channel_account] = info.connection_id
 
         logger.info(
-            "Connection added: %s (type=%s, domain=%s, total=%d)",
+            "Connection added: {} (type={}, domain={}, total={})",
             info.connection_id,
             info.connection_type.value,
             info.permission_domain.value,
@@ -330,7 +330,7 @@ class ConnectionManager:
             )
 
         logger.info(
-            "Connection registered: %s (type=%s, domain=%s)",
+            "Connection registered: {} (type={}, domain={})",
             config.connection_id,
             config.connection_type.value,
             config.permission_domain.value,
@@ -358,7 +358,7 @@ class ConnectionManager:
         info = self.pool.remove(connection_id)
         if info:
             info.state = ConnectionState.DISCONNECTED
-            logger.info("Connection unregistered: %s", connection_id)
+            logger.info("Connection unregistered: {}", connection_id)
 
     # ---- 来源注册 ----
 
@@ -403,7 +403,7 @@ class ConnectionManager:
             await info.send_queue.put(message)
             return True
         except Exception as e:
-            logger.error("Failed to queue message for %s: %s", connection_id, e)
+            logger.error("Failed to queue message for {}: {}", connection_id, str(e))
             return False
 
     async def send_to_source(
@@ -494,14 +494,14 @@ class ConnectionManager:
                     info.last_activity = time.time()
 
                 except Exception as e:
-                    logger.error("Send error %s: %s", info.connection_id, e)
+                    logger.error("Send error {}: {}", info.connection_id, str(e))
                     info.state = ConnectionState.ERROR
                     break
 
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            logger.error("Send loop error %s: %s", info.connection_id, e)
+            logger.error("Send loop error {}: {}", info.connection_id, str(e))
 
     async def _heartbeat_loop(self, info: ConnectionInfo) -> None:
         """心跳循环。"""
@@ -526,7 +526,7 @@ class ConnectionManager:
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            logger.error("Heartbeat error %s: %s", info.connection_id, e)
+            logger.error("Heartbeat error {}: {}", info.connection_id, str(e))
 
     # ---- 消息处理 ----
 
@@ -564,7 +564,7 @@ class ConnectionManager:
                 if asyncio.iscoroutine(result):
                     await result
             except Exception as e:
-                logger.error("Message callback error: %s", e)
+                logger.error("Message callback error: {}", str(e))
 
     async def _handle_connect(self, info: ConnectionInfo, message: GatewayMessage) -> None:
         """处理 CONNECT 消息。"""
@@ -599,7 +599,7 @@ class ConnectionManager:
         info.state = ConnectionState.AUTHENTICATED
 
         logger.info(
-            "Connection authenticated: %s (source=%s, type=%s)",
+            "Connection authenticated: {} (source={}, type={})",
             info.connection_id,
             source,
             source_type,

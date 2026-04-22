@@ -1,8 +1,8 @@
 """ContextConfig 默认值 + 自定义覆盖测试。"""
 from __future__ import annotations
 
-from core.context.schemas import ContextConfig
-from core.memento_s.schemas import AgentConfig
+from core.context.config import ContextManagerConfig
+from core.memento_s.schemas import AgentRuntimeConfig as AgentConfig
 
 
 def test_context_config_defaults():

@@ -1,6 +1,6 @@
 [project]
 name = "memento-s"
-version = "0.2.0"
+version = "0.3.0"
 description = "Memento-S Agent"
 requires-python = ">=3.12"
 dependencies = [
@@ -13,7 +13,7 @@ dependencies = [
     "anthropic",
     "openai",
     "litellm>=1.81.10",
-    "mcp",
+    "mcp>=1.27.0",
     "tiktoken>=0.7.0,<0.12.0",
     "httpx",
     "beautifulsoup4",
@@ -59,7 +59,7 @@ app.name            = "memento-s"
 app.product         = "Memento-S"
 app.org             = "com.yangtzeailab.memento-s"
 app.bundle_id       = "com.yangtzeailab.memento-s.app"
-app.build_version   = "0.2.0"
+app.build_version   = "0.3.0"
 app.build_number    = 1
 
 [tool.flet.app.macos]
@@ -71,7 +71,7 @@ entitlements  = { "com.apple.security.network.client" = true, "com.apple.securit
 [tool.briefcase]
 project_name = "Memento-S"
 bundle = "com.memento-s"
-version = "0.2.0"
+version = "0.3.0"
 
 [tool.briefcase.app.memento-s]
 formal_name = "Memento-S"
@@ -87,6 +87,11 @@ sources = [
     "utils",
     "builtin",
     "daemon",
+    "infra",
+    "tools",
+    "shared",
+    "im",
+    "server",
     "bootstrap",   # bootstrap/ package (was bootstrap.py)
 ]
 requires = [
@@ -100,7 +105,7 @@ requires = [
     "pydantic-settings",
     "python-dotenv",
     "watchdog",
-    "mcp",
+    "mcp>=1.27.0",
     "tiktoken>=0.7.0,<0.12.0",
     "httpx",
     "beautifulsoup4",
@@ -124,7 +129,7 @@ console_app = false
 
 # ─── Hatch build ───────────────────────────────────────────────────────────────
 [tool.hatch.build.targets.wheel]
-packages = ["cli", "core", "middleware", "gui", "utils", "builtin", "daemon"]
+packages = ["cli", "core", "middleware", "gui", "utils", "builtin", "daemon", "infra", "tools", "shared", "im", "server"]
 include = [
     "bootstrap.py",
     "builtin/skills/**",
@@ -139,6 +144,11 @@ include = [
     "utils/",
     "builtin/",
     "daemon/",
+    "infra/",
+    "tools/",
+    "shared/",
+    "im/",
+    "server/",
     "bootstrap.py",
     "pyproject.toml",
     "README.md",

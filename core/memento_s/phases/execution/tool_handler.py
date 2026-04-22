@@ -13,7 +13,7 @@ from utils.logger import get_logger
 
 from core.prompts.templates import ERROR_POLICY_MSG
 from ..state import AgentRunState
-from ...tools import TOOL_EXECUTE_SKILL, TOOL_SEARCH_SKILL, ToolDispatcher
+from ...skill_dispatch import TOOL_EXECUTE_SKILL, TOOL_SEARCH_SKILL, SkillDispatcher
 from ...utils import can_direct_execute_skill
 
 logger = get_logger(__name__)
@@ -32,7 +32,7 @@ def _enforce_explicit_skill(
     skill_calls: list[ToolCall],
     state: AgentRunState,
     user_content: str,
-    tool_dispatcher: ToolDispatcher,
+    tool_dispatcher: SkillDispatcher,
 ) -> list[ToolCall]:
     """Enforce explicit skill intent on first execute_skill call."""
     if not state.explicit_skill_name or state.explicit_skill_retry_done:
@@ -74,14 +74,15 @@ def _check_error_policy(
             RecoveryAction.PROMPT_USER,
             RecoveryAction.ABORT,
         }:
-            final_text = ERROR_POLICY_MSG.format(
+            error_text = ERROR_POLICY_MSG.format(
                 action=decision.action.value,
                 reason=decision.reason,
             )
             events = [
                 emitter.step_finished(step=step, status=StepStatus.FINALIZE),
-                emitter.run_finished(
-                    output_text=final_text,
+                # 错误时使用 run_error 事件，type 为 RUN_ERROR
+                emitter.run_error(
+                    message=error_text,
                     reason=AgentFinishReason.ERROR_POLICY_ABORT
                     if decision.action == RecoveryAction.ABORT
                     else AgentFinishReason.ERROR_POLICY_PROMPT,
@@ -89,24 +90,34 @@ def _check_error_policy(
                 ),
             ]
             return True, events
+
+        # 产物存在时的 CONTINUE 动作：有产物但未完全成功，允许继续到下一步
+        # 不中止执行，让 step boundary 处理继续
+        if decision and decision.action == RecoveryAction.CONTINUE:
+            return False, []  # should_abort=False, 不发送事件，继续执行
     except Exception:
         pass
     return False, []
 
 
 def _track_execute_result(state: AgentRunState, sc: ToolCall, result: str) -> None:
-    """Track blocked skills and execution failure counts."""
+    """Track blocked skills, execution failure counts, and per-skill failure patterns."""
+    skill_name = sc.arguments.get("skill_name", "")
     try:
         payload = json.loads(result)
         summary = str(payload.get("summary", ""))
         output_text = str(payload.get("output", ""))
         if "[NOT_RELEVANT]" in summary or "[NOT_RELEVANT]" in output_text:
-            state.blocked_skills.add(sc.arguments.get("skill_name", ""))
+            state.blocked_skills.add(skill_name)
         if not payload.get("ok", False):
             state.execute_failures += 1
             state.last_execute_error = summary
+            error_type = str(payload.get("error_code", "UNKNOWN"))
+            state.skill_failure_tracker.setdefault(skill_name, []).append(error_type)
         else:
             state.execute_failures = 0
+            state.skill_failure_tracker.pop(skill_name, None)
     except Exception:
         state.execute_failures += 1
         state.last_execute_error = result[:200]
+        state.skill_failure_tracker.setdefault(skill_name, []).append("PARSE_ERROR")

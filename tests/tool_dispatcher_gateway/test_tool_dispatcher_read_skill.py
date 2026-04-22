@@ -4,11 +4,11 @@ import json
 
 import pytest
 
-from core.memento_s.tool_dispatcher import ToolDispatcher
+from core.memento_s.skill_dispatch import SkillDispatcher
 
 
 @pytest.mark.asyncio
-async def test_read_skill_missing_name_real_gateway(real_dispatcher: ToolDispatcher):
+async def test_read_skill_missing_name_real_gateway(real_dispatcher: SkillDispatcher):
     raw = await real_dispatcher.execute("read_skill", {})
     payload = json.loads(raw)
 
@@ -18,7 +18,7 @@ async def test_read_skill_missing_name_real_gateway(real_dispatcher: ToolDispatc
 
 
 @pytest.mark.asyncio
-async def test_read_skill_not_found_real_gateway(real_dispatcher: ToolDispatcher):
+async def test_read_skill_not_found_real_gateway(real_dispatcher: SkillDispatcher):
     raw = await real_dispatcher.execute(
         "read_skill",
         {"skill_name": "completely_nonexistent_skill_xyz"},
@@ -31,7 +31,7 @@ async def test_read_skill_not_found_real_gateway(real_dispatcher: ToolDispatcher
 
 
 @pytest.mark.asyncio
-async def test_read_skill_success_real_gateway(real_dispatcher: ToolDispatcher):
+async def test_read_skill_success_real_gateway(real_dispatcher: SkillDispatcher):
     listed = json.loads(await real_dispatcher.execute("skill_list", {"verbose": False}))
     skill_name = listed["output"][0]["name"]
 

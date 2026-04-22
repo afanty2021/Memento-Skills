@@ -38,7 +38,7 @@ class PlanStep(BaseModel):
     action: str
     expected_output: str = ""
     skill_name: str | None = None
-    skill_request: str = ""
+    skill_request: str | None = None
     input_from: list[int] = Field(default_factory=list)
     requires_user_input: bool = False
 
@@ -100,7 +100,7 @@ def validate_plan(plan: TaskPlan, available_skill_names: set[str]) -> TaskPlan:
     for step in plan.steps:
         if step.skill_name and step.skill_name not in available_skill_names:
             logger.warning(
-                "Plan step %d references unknown skill '%s', clearing",
+                "Plan step {} references unknown skill '{}', clearing",
                 step.step_id, step.skill_name,
             )
             step.skill_name = None
@@ -175,10 +175,25 @@ async def generate_plan(
             "PLAN_RESULT", "system",
             f"steps={len(plan.steps)}, goal={plan.goal[:60]}",
         )
+        logger.info(
+            "=== PLAN GENERATED: {} step(s) ===\n"
+            "Goal: {}\n"
+            "{}",
+            len(plan.steps),
+            plan.goal,
+            "\n".join(
+                f"  Step {s.step_id}: action={s.action!r}\n"
+                f"    expected_output={s.expected_output!r}\n"
+                f"    skill_name={s.skill_name!r}\n"
+                f"    skill_request={s.skill_request!r}\n"
+                f"    input_from={s.input_from}"
+                for s in plan.steps
+            ),
+        )
         return plan
 
     except Exception as e:
-        logger.warning("Plan generation failed, single-step fallback: {}", e)
+        logger.warning("Plan generation failed, single-step fallback: {}", str(e))
         return TaskPlan(
             goal=goal,
             steps=[PlanStep(step_id=1, action=goal, expected_output="Complete user request")],

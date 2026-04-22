@@ -376,7 +376,7 @@ async def _async_main(
         if existing is None:
             raise ValueError(f"Session not found: {session_id}")
     else:
-        created = await ChatManager.create_session(title="CLI Session", metadata={})
+        created = await ChatManager.create_session(title="CLI Session", metadata={"channel": "mementos"})
         session_id = created.id
 
     _print_banner(workspace, session_id, version)

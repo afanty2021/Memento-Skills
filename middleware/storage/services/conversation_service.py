@@ -68,7 +68,9 @@ class ConversationService(BaseService):
             sequence = await self._get_next_sequence(db, data.session_id)
 
         obj = Conversation(
+            **({"id": data.id} if data.id else {}),
             session_id=data.session_id,
+            conversation_id=data.conversation_id,
             sequence=sequence,
             role=data.role,
             title=data.title,
@@ -175,7 +177,7 @@ class ConversationService(BaseService):
         """Update session conversation count and total tokens."""
         # Get stats
         stmt = select(
-            func.count(Conversation.id).label("count"),
+            func.count(func.distinct(Conversation.conversation_id)).label("count"),
             func.coalesce(func.sum(Conversation.tokens), 0).label("tokens"),
         ).where(Conversation.session_id == session_id)
         result = await db.execute(stmt)

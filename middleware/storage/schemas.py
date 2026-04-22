@@ -52,7 +52,9 @@ class SessionRead(BaseModel):
 class ConversationCreate(BaseModel):
     """创建对话请求"""
 
+    id: str | None = None  # 如果为None，自动生成 UUID
     session_id: str
+    conversation_id: str  # 对话轮次ID
     role: str  # user/assistant/system
     title: str
     content: str
@@ -79,6 +81,7 @@ class ConversationRead(BaseModel):
 
     id: str
     session_id: str
+    conversation_id: str
     sequence: int
     role: str
     title: str

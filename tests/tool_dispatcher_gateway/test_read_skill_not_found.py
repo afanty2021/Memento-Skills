@@ -4,11 +4,11 @@ import json
 
 import pytest
 
-from core.memento_s.tool_dispatcher import ToolDispatcher
+from core.memento_s.skill_dispatch import SkillDispatcher
 
 
 @pytest.mark.asyncio
-async def test_read_skill_not_found(real_dispatcher: ToolDispatcher):
+async def test_read_skill_not_found(real_dispatcher: SkillDispatcher):
     raw = await real_dispatcher.execute(
         "read_skill", {"skill_name": "completely_nonexistent_skill_xyz"}
     )

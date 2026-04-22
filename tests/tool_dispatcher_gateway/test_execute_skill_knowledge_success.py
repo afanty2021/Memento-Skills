@@ -4,13 +4,13 @@ import json
 
 import pytest
 
-from core.memento_s.tool_dispatcher import ToolDispatcher
-from core.skill.gateway import SkillManifest
+from core.memento_s.skill_dispatch import SkillDispatcher
 from core.skill.gateway import SkillGateway
+from shared.schema import SkillManifest
 
 
 @pytest.mark.asyncio
-async def test_execute_skill_knowledge_success(real_dispatcher: ToolDispatcher):
+async def test_execute_skill_knowledge_success(real_dispatcher: SkillDispatcher):
     provider = real_dispatcher._gateway
     assert isinstance(provider, SkillGateway)
 

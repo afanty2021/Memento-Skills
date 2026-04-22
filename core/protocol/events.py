@@ -29,6 +29,7 @@ class AGUIEventType(StrEnum):
     AWAITING_USER_INPUT = "AWAITING_USER_INPUT"
     RUN_FINISHED = "RUN_FINISHED"
     RUN_ERROR = "RUN_ERROR"
+    USER_INPUT = "USER_INPUT"
 
 
 def utc_now_iso() -> str:

@@ -2,21 +2,22 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from builtin.tools.grep import grep_tool
+import asyncio
+
+from tools.atomics.grep import grep
 
 
-def test_grep_tool_with_allow_roots(tmp_path: Path) -> None:
+def test_grep_tool_basic(tmp_path: Path) -> None:
+    """Test grep searches files and finds matching patterns."""
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    allow_roots = [str(workspace)]
 
     target = workspace / "data.txt"
     target.write_text("hello world", encoding="utf-8")
 
-    result = grep_tool.__wrapped__(
+    result = asyncio.run(grep(
         pattern="hello",
         dir_path=str(workspace),
-        allow_roots=allow_roots,
-    )
+    ))
 
     assert "hello" in result

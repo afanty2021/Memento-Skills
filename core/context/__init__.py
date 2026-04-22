@@ -1,21 +1,33 @@
-"""core.context — 统一的上下文管理模块。
+"""core.context — unified context management API.
 
-ContextManager 是 agent 唯一的上下文入口，负责:
-  - prompt 构建与历史管理
-  - scratchpad（tool result 持久化）
-  - compress（单条超长消息 LLM 摘要）
-  - compact（消息列表 LLM 全量合并）
+Public entry points:
+  - ContextManager: the single Agent-facing context interface
+  - RuntimeState / RuntimeStateStore: per-session persistence
+  - sync_from_agent_run: AgentRunState → RuntimeState synchroniser
+  - SessionStatus / SessionGoal / ActionRecord: session data schemas
+  - PreApiPipeline: pre-API context processing pipeline
+
+Submodules:
+  - history: HistoryManager (load & slim history)
+  - session: SessionGoal, SessionStatus, ActionRecord (migrated from core/session)
+    (imported directly from submodules to avoid circular deps)
 """
-from .block import Block, BlockManager, BlockMeta, make_event
-from .manager import ContextManager
-from .runtime_state import RuntimeState, RuntimeStateStore
+
+from .context_manager import ContextManager
+from .runtime import RuntimeState, RuntimeStateStore, sync_from_agent_run
+from .session import SessionStatus, SessionGoal, ActionRecord, build_session_context_block
+from .session_context import SessionContext
+from .pre_api_pipeline import PreApiPipeline
 
 __all__ = [
-    "Block",
-    "BlockManager",
-    "BlockMeta",
     "ContextManager",
     "RuntimeState",
     "RuntimeStateStore",
-    "make_event",
+    "sync_from_agent_run",
+    "SessionStatus",
+    "SessionGoal",
+    "ActionRecord",
+    "build_session_context_block",
+    "SessionContext",
+    "PreApiPipeline",
 ]

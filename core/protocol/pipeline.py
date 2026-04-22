@@ -7,14 +7,14 @@ from __future__ import annotations
 
 import inspect
 import json
-import logging
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Protocol, runtime_checkable
 
 from .events import AGUIEventType
 from .types import RunStatus
+from utils.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @runtime_checkable
@@ -218,9 +218,8 @@ class ToolTranscriptSink(AGUIEventSink):
             if inspect.isawaitable(result):
                 await result
         except Exception:
-            logger.warning(
-                "ToolTranscriptSink._persist failed (role=%s, title=%s)",
+            logger.opt(exception=True).warning(
+                "ToolTranscriptSink._persist failed (role={}, title={})",
                 role,
                 title,
-                exc_info=True,
             )

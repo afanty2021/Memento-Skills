@@ -22,13 +22,20 @@ Memento-S 配置管理模块（文件模式）
 """
 
 from .config_manager import ConfigManager, g_config
-from .config_models import GlobalConfig
+from .schemas.config_models import GlobalConfig
+from .schemas.mcp_config_schemas import McpConfig as McpConfigSchema
+from .schemas.skill_config_schemas import SkillRegistryConfig as SkillRegistryConfigSchema
 from .schema_meta import SchemaMetadata
+from .skill_config_manager import SkillConfigManager, skill_config_manager
 
 
 __all__ = [
     "ConfigManager",
     "GlobalConfig",
+    "McpConfigSchema",
+    "SkillRegistryConfigSchema",
     "SchemaMetadata",
+    "SkillConfigManager",
     "g_config",
+    "skill_config_manager",
 ]
